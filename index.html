@@ -365,9 +365,7 @@ function flyUpdate(dt){
     const e=easeIO(fly.t), dx=fly.tx-fly.fx, dy=fly.ty-fly.fy;
     const bow=Math.sin(e*Math.PI)*fly.arc;
     fly.x=fly.fx+dx*e-dy*bow; fly.y=fly.fy+dy*e+dx*bow;
-    if(pts.size===0){                            // 飛んでいる間はカメラが緩く追う
-      camX+=(fly.x-camX)*0.05; camY+=(fly.y-camY)*0.05;
-    }
+    // カメラは追従させない。視点の主導権は常にプレイヤー側にある
     if(fly.t>=1 && pendingAnchor){ reanchor(pendingAnchor); pendingAnchor=null; armed=true; }
     return;
   }

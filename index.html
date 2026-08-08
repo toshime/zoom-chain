@@ -19,22 +19,6 @@
     -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
   }
   canvas { display:block; width:100%; height:100%; touch-action:none; }
-  .zui {
-    position:fixed; top:calc(env(safe-area-inset-top) + 18px);
-    left:50%; transform:translateX(-50%);
-    width:min(360px, 68vw); pointer-events:none; text-align:center;
-    font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    color:#1a1a1a; mix-blend-mode:multiply;
-  }
-  .mag { font-size:13px; letter-spacing:.16em; font-variant-numeric:tabular-nums;
-    opacity:.75; margin-bottom:9px; }
-  .bar { position:relative; height:1px; background:rgba(26,26,26,.22); }
-  .bar::before, .bar::after { content:''; position:absolute; top:-3px; width:1px; height:7px;
-    background:rgba(26,26,26,.3); }
-  .bar::before{left:0;} .bar::after{right:0;}
-  .mark { position:absolute; top:-2px; height:5px; background:rgba(26,26,26,.16); }
-  .knob { position:absolute; top:-3.5px; width:8px; height:8px; margin-left:-4px;
-    border-radius:50%; background:#1a1a1a; }
   /* 初回だけ出る操作ヒント。UIを増やさないよう数秒で消える */
   .hint {
     position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 26px);
@@ -50,10 +34,6 @@
 <body>
 
 <canvas id="cv"></canvas>
-<div class="zui">
-  <div class="mag" id="mag">×1.0</div>
-  <div class="bar"><div class="mark" id="mark"></div><div class="knob" id="knob"></div></div>
-</div>
 <div class="hint" id="hint">ハエに寄る</div>
 
 <script>
@@ -82,7 +62,8 @@ window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', ()=>setTimeout(resize,120));
 
 // ── チューニング定数 ───────────────────────────────────────
-const MIN_ZOOM=-0.45, MAX_ZOOM=5.4;
+// 倍率の上下限は「壁」ではなく数値が壊れないための保険。表示UIが無いので広く取ってある
+const MIN_ZOOM=-3.2, MAX_ZOOM=8.5;
 const SWAP_HI  = 4.35;   // ここまで寄ると入れ替わり確定
 const FADE_W   = 0.8;    // クロスフェードにかける zoom 幅
 const MOVE_OUT = 0.75;   // ここまで引くとハエが次の場所へ飛ぶ
@@ -99,16 +80,12 @@ let zoomTarget=0, smoothAX=0, smoothAY=0, smoothTau=0.14;
 const toScreen=(x,y)=>[W/2+(x-camX)*scale(), H/2+(y-camY)*scale()];
 const toWorld =(x,y)=>[camX+(x-W/2)/scale(), camY+(y-H/2)/scale()];
 
-function clampCam(){
-  const r = 60 + 1200/Math.pow(2, zoom);
-  const d = Math.hypot(camX,camY);
-  if(d>r){ camX*=r/d; camY*=r/d; }
-}
+// カメラの移動範囲は制限しない。絵の外まで自由に出られる方が触っていて気持ちがいい
 function setZoom(z, sx, sy){        // (sx,sy) の下のワールド点を固定したまま倍率を変える
   const [wx,wy]=toWorld(sx,sy);
   zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
   const [ax,ay]=toWorld(sx,sy);
-  camX += wx-ax; camY += wy-ay; clampCam();
+  camX += wx-ax; camY += wy-ay;
 }
 function zoomAt(f, sx, sy){         // ピンチ：指に1:1で追従させる（補間を挟むと遅れて気持ち悪い）
   setZoom(zoom+Math.log2(f), sx, sy);
@@ -142,7 +119,7 @@ cv.addEventListener('pointermove', e=>{
     prevDist=dist; prevCx=cx; prevCy=cy;
   } else {
     camX-=(e.clientX-prevCx)/scale(); camY-=(e.clientY-prevCy)/scale();
-    prevCx=e.clientX; prevCy=e.clientY; clampCam();
+    prevCx=e.clientX; prevCy=e.clientY;
   }
 });
 function release(e){
@@ -389,7 +366,7 @@ function flyUpdate(dt){
     const bow=Math.sin(e*Math.PI)*fly.arc;
     fly.x=fly.fx+dx*e-dy*bow; fly.y=fly.fy+dy*e+dx*bow;
     if(pts.size===0){                            // 飛んでいる間はカメラが緩く追う
-      camX+=(fly.x-camX)*0.05; camY+=(fly.y-camY)*0.05; clampCam();
+      camX+=(fly.x-camX)*0.05; camY+=(fly.y-camY)*0.05;
     }
     if(fly.t>=1 && pendingAnchor){ reanchor(pendingAnchor); pendingAnchor=null; armed=true; }
     return;
@@ -475,11 +452,6 @@ function frame(ms){
   ctx.restore();
 
   drawFly(t);
-
-  const mag=Math.pow(2, zoom);
-  el('mag').textContent='×'+(mag<10?mag.toFixed(1):Math.round(mag));
-  const p=(zoom-MIN_ZOOM)/(MAX_ZOOM-MIN_ZOOM)*100;
-  el('knob').style.left=p+'%'; el('mark').style.width=p+'%';
 
   requestAnimationFrame(frame);
 }

@@ -491,11 +491,11 @@ function drawFly(t){
   // 入れ替わり中と「引け」の催促中は激しく羽ばたく
   const agit=Math.max(blend, (!armed && !pendingAnchor && hasNext() && zoom>=MOVE_OUT) ? 0.85 : 0);
   // 止まり際も判定の周りをノイズっぽく漂う（乱数でなく非整数比の正弦の重ね）
-  const amp=(flying?10:16)+agit*40, spd=1+agit*2.6;
+  const amp=(flying?10:48)+agit*40, spd=1+agit*2.6;
   const jx=(Math.sin(t*2.3*spd)*0.70+Math.sin(t*5.7*spd)*0.35+Math.sin(t*11.3*spd)*0.15)*amp;
   const jy=(Math.cos(t*1.9*spd)*0.55+Math.cos(t*6.4*spd)*0.30+Math.cos(t*12.7*spd)*0.15)*amp;
   const [px,py]=toScreen(fly.x, fly.y);
-  const s=Math.max(18, Math.min(60, 20+zoom*11));   // 画面px
+  const s=Math.max(9, Math.min(30, 10+zoom*5.5));   // 画面px（従来の半分）
 
   ctx.save();
   ctx.translate(px+jx, py+jy);
@@ -621,7 +621,9 @@ function present(t){
 function paint(idx, anchorName, alpha){
   const sc=SCENES[idx], a=regionOf(idx, anchorName), k=R0/a.r;  // k = ワールド / 画像px
   ctx.globalAlpha=alpha;
-  ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);
+  // 最後のシーンだけ宇宙なので黒地。クロスフェードで黒ごとぬるっと入る
+  ctx.fillStyle = idx===SCENES.length-1 ? '#000' : PAPER;
+  ctx.fillRect(0,0,W,H);
   ctx.save();
   const s=scale();
   ctx.translate(W/2-camX*s, H/2-camY*s); ctx.scale(s*k, s*k);
@@ -644,7 +646,7 @@ function frame(ms){
     paint(node, activeAnchor, 1);                 // A は不透明
     if(blend>0.001 && node+1<SCENES.length)       // B を alpha=blend で重ねる（濁らない合成）
       paint(node+1, 'land', blend);
-    drawFly(t);
+    if(node>0 && node<SCENES.length-1) drawFly(t);  // タイトルと最後の宇宙にはハエは居ない
   }else{
     ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);   // 読み込みが終わるまでは紙だけ
   }

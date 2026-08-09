@@ -49,17 +49,25 @@
 // ═══════════════════════════════════════════════════════════
 
 const cv = document.getElementById('cv');
-const ctx = cv.getContext('2d');
+const view = cv.getContext('2d');            // 画面に出す最終合成先
+// 絵はすべてオフスクリーンに描く。周辺視野のぼかしで同じ絵を2回使うため
+const off = document.createElement('canvas');
+const ctx = off.getContext('2d');
 let W=0, H=0, DPR=1;
 
 function resize(){
   DPR = Math.min(window.devicePixelRatio||1, 2.5);
   W = cv.clientWidth; H = cv.clientHeight;
   cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
-  ctx.setTransform(DPR,0,0,DPR,0,0);
+  off.width = cv.width; off.height = cv.height;
+  view.setTransform(DPR,0,0,DPR,0,0);
+  ctx.setTransform(DPR,0,0,DPR,0,0);         // 幅を代入すると状態が飛ぶので毎回置き直す
+  buildPeriph();
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', ()=>setTimeout(resize,120));
+// レイアウト前（clientWidth=0）に起動すると resize イベントが来ず復帰できないので監視しておく
+if(window.ResizeObserver) new ResizeObserver(resize).observe(cv);
 
 // ── チューニング定数 ───────────────────────────────────────
 // 倍率の上下限は「壁」ではなく数値が壊れないための保険。表示UIが無いので広く取ってある
@@ -68,6 +76,11 @@ const SWAP_HI  = 4.35;   // ここまで寄ると入れ替わり確定
 const FADE_W   = 0.8;    // クロスフェードにかける zoom 幅
 const MOVE_OUT = 0.75;   // ここまで引くとハエが次の場所へ飛ぶ
 const MOVE_WAIT= 0.7;    // 引いてから飛び立つまでの間
+
+// 周辺視野ぼかし
+const PERIPH     = true; // 切るとオフスクリーンをそのまま出すだけになる
+const PERIPH_MAX = 10;   // 最も強いところのぼけ半径（画面px）
+const PERIPH_R0  = 0.22; // ここまでは素通し（画面中心〜対角半径に対する比）
 
 const swapLo = SWAP_HI - FADE_W;
 const fit   = () => Math.min(W,H)/1150;
@@ -416,6 +429,57 @@ const tile=document.createElement('canvas'); tile.width=tile.height=180;
 })();
 const grain=ctx.createPattern(tile,'repeat');
 
+// ── 周辺視野ぼかし ─────────────────────────────────────────
+//  中心は素通し、外に向かうほどぼける。オフスクリーンの絵を縮小してぼかし、
+//  放射グラデーションを destination-in でマスクにして、鮮明な絵の上に重ねる。
+//  縮小してからぼかすのは負荷対策。どうせぼけるので解像度は要らない。
+const CAN_FILTER=(()=>{                        // Safari 17 未満などは ctx.filter が無い
+  const c=document.createElement('canvas').getContext('2d');
+  c.filter='blur(2px)'; return c.filter==='blur(2px)';
+})();
+const DS = CAN_FILTER ? 0.5 : 0.12;            // filter が無い環境は縮小拡大のボケだけで代用する
+const blurCv=document.createElement('canvas'), bctx=blurCv.getContext('2d');
+let bw=0, bh=0, bpad=0, bmask=null;
+
+function buildPeriph(){
+  if(!PERIPH || !W || !H) return;
+  bw=Math.max(1,Math.round(W*DS)); bh=Math.max(1,Math.round(H*DS));
+  // ぼかしはキャンバスの外を透明として拾うので、縁が欠けないぶんの余白を取る
+  bpad=CAN_FILTER ? Math.ceil(PERIPH_MAX*DS*3) : 2;
+  blurCv.width=bw+bpad*2; blurCv.height=bh+bpad*2;
+  const cx=bpad+bw/2, cy=bpad+bh/2, half=Math.hypot(bw,bh)/2;
+  const g=bctx.createRadialGradient(cx,cy,half*PERIPH_R0, cx,cy,half);
+  // smoothstep 相当のカーブ。線形だと効き始めが帯に見え、t^2 だと中間がほぼ効かない
+  [[0,0],[0.25,0.08],[0.5,0.32],[0.75,0.68],[1,1]].forEach(s=>
+    g.addColorStop(s[0],'rgba(0,0,0,'+s[1]+')'));
+  bmask=g;
+}
+
+function present(){
+  if(!W || !H) return;                                  // レイアウト前は描くものが無い
+  view.drawImage(off, 0,0, W,H);                        // まず鮮明な絵をそのまま
+  if(PERIPH && bmask){
+    const wd=blurCv.width, ht=blurCv.height;
+    bctx.setTransform(1,0,0,1,0,0);
+    bctx.globalCompositeOperation='source-over';
+    bctx.clearRect(0,0,wd,ht);
+    if(CAN_FILTER) bctx.filter='blur('+(PERIPH_MAX*DS)+'px)';
+    bctx.drawImage(off, 0,0, wd,ht);                    // 余白を埋める下地（引き伸ばし）
+    bctx.drawImage(off, bpad,bpad, bw,bh);              // 正位置。縁だけ下地が透ける
+    bctx.filter='none';
+    bctx.globalCompositeOperation='destination-in';     // グラデーションで抜く
+    bctx.fillStyle=bmask; bctx.fillRect(0,0,wd,ht);
+    bctx.globalCompositeOperation='source-over';
+    view.drawImage(blurCv, bpad,bpad, bw,bh, 0,0, W,H);
+  }
+  // 紙目はぼかしの外側＝全面に等倍で乗せる。紙そのものはボケない
+  // （2枚の絵が「同じ1枚の紙の上の出来事」に見える条件なので、ここは崩さない）
+  view.save();
+  view.globalCompositeOperation='multiply'; view.globalAlpha=0.5;
+  view.fillStyle=grain; view.fillRect(0,0,W,H);
+  view.restore();
+}
+
 // ── 描画 ───────────────────────────────────────────────────
 function paint(nodeIdx, anchorName, alpha){
   const cr=CREATURES[CHAIN[nodeIdx].c], a=cr.anchors[anchorName];
@@ -444,12 +508,8 @@ function frame(ms){
     paint(nx, CHAIN[nx].land, blend);
   }
 
-  ctx.save();
-  ctx.globalCompositeOperation='multiply'; ctx.globalAlpha=0.5;
-  ctx.fillStyle=grain; ctx.fillRect(0,0,W,H);
-  ctx.restore();
-
   drawFly(t);
+  present();     // オフスクリーン → 画面（周辺だけぼかす）。紙目はこの中で最後に乗る
 
   requestAnimationFrame(frame);
 }

@@ -17,22 +17,52 @@
     -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
   }
   canvas { display:block; width:100%; height:100%; touch-action:none; }
-  /* 初回だけ出る操作ヒント。UIを増やさないよう数秒で消える */
+  /* 開始後だけ出る操作ヒント。UIを増やさないよう数秒で消える */
   .hint {
     position:fixed; left:50%; bottom:calc(env(safe-area-inset-bottom) + 26px);
     transform:translateX(-50%); pointer-events:none; white-space:nowrap;
     font:12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.12em;
-    color:#1a1a1a; mix-blend-mode:multiply; opacity:.55;
-    animation:hintOut 1.2s ease 6s forwards;
+    color:#1a1a1a; mix-blend-mode:multiply; opacity:0;
   }
-  @keyframes hintOut { to { opacity:0; } }
-  @media (prefers-reduced-motion: reduce) { .hint { animation-delay:3s; } }
+  .hint.go { animation:hintCycle 7.4s ease forwards; }
+  @keyframes hintCycle { 0%{opacity:0} 8%{opacity:.55} 80%{opacity:.55} 100%{opacity:0} }
+
+  /* タイトル */
+  .start {
+    position:fixed; inset:0; z-index:10; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(240,240,238,.955); color:#1a1a1a;
+    -webkit-tap-highlight-color:transparent;
+    transition:opacity .6s ease;
+  }
+  .start.off { opacity:0; pointer-events:none; }
+  .ttl {
+    font-family:"Hiragino Mincho ProN", "Yu Mincho", YuMincho, serif;
+    font-size:clamp(46px, 18vw, 96px); line-height:1;
+    letter-spacing:.24em; text-indent:.24em;   /* 字間を空けたぶん中央がずれるので同量ぶら下げる */
+  }
+  .rule { width:min(230px, 54vw); height:1px; background:rgba(26,26,26,.26); margin:30px 0 24px; }
+  .go, .note {
+    font:12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.2em; white-space:nowrap;
+  }
+  .go { animation:breathe 2.6s ease-in-out infinite; }
+  .note { margin-top:15px; font-size:11px; letter-spacing:.16em; opacity:.42; }
+  @keyframes breathe { 0%,100%{opacity:.85} 50%{opacity:.38} }
+  @media (prefers-reduced-motion: reduce) {
+    .go { animation:none; opacity:.85; }
+  }
 </style>
 </head>
 <body>
 
 <canvas id="cv"></canvas>
 <div class="hint" id="hint">ハエに寄る</div>
+<div class="start" id="start" role="button" tabindex="0" aria-label="複眼 — クリックしてスタート">
+  <div class="ttl">複眼</div>
+  <div class="rule"></div>
+  <div class="go">クリックしてスタート</div>
+  <div class="note">音が流れます</div>
+</div>
 
 <script>
 // ═══════════════════════════════════════════════════════════
@@ -516,21 +546,24 @@ const CAN_FILTER=(()=>{                        // Safari 17 未満などは ctx.
   const c=document.createElement('canvas').getContext('2d');
   c.filter='blur(2px)'; return c.filter==='blur(2px)';
 })();
-const DS = CAN_FILTER ? 0.38 : 0.12;           // filter が無い環境は縮小拡大のボケだけで代用する
+// 縮小率は「デバイス画素」に対する比。CSS px 基準にすると高DPRの端末ほど粗くなる（DPR2で実質0.19倍＝5.26倍拡大）。
+// 0.5 はちょうど 1/2 なので縮小も拡大も端数が出ず、リサンプルが一番きれいに乗る（0.65 より 0.5 の方が誤差が小さい）
+const DS = CAN_FILTER ? 0.5 : 0.07;            // filter が無い環境は縮小拡大のボケだけで代用する
 
 const mkCv=()=>document.createElement('canvas');
 const wsrcCv=mkCv(), blurCv=mkCv();
 const wctx=wsrcCv.getContext('2d'), bctx=blurCv.getContext('2d');
-let bw=0, bh=0, bpad=0, bmask=null;
+let bw=0, bh=0, bpad=0, brad=0, bmask=null;
 
 // 効きのカーブ。線形だと効き始めが帯に見え、t^2 だと中間がほぼ素通しになる
 const PERIPH_STOPS=[[0,0],[0.25,0.22],[0.5,0.58],[0.75,0.88],[1,1]];
 
 function buildPeriph(){
   if(!PERIPH || !W || !H) return;
-  bw=Math.max(1,Math.round(W*DS)); bh=Math.max(1,Math.round(H*DS));
+  bw=Math.max(1,Math.round(off.width*DS)); bh=Math.max(1,Math.round(off.height*DS));
+  brad=PERIPH_MAX*DPR*DS;                      // PERIPH_MAX は画面px なのでバッファのpxへ換算する
   // ぼかしはキャンバス外を透明として拾うので、縁が欠けないぶんの余白を取る
-  bpad=CAN_FILTER ? Math.ceil(PERIPH_MAX*DS*2 + 2) : 2;
+  bpad=CAN_FILTER ? Math.ceil(brad*2 + 2) : 2;
   const pw=bw+bpad*2, ph=bh+bpad*2;
   [wsrcCv,blurCv].forEach(c=>{ c.width=pw; c.height=ph; });
   const cx=bpad+bw/2, cy=bpad+bh/2, half=Math.hypot(bw,bh)/2;
@@ -552,7 +585,7 @@ function present(){
     bctx.setTransform(1,0,0,1,0,0);
     bctx.globalCompositeOperation='source-over';
     bctx.clearRect(0,0,pw,ph);
-    if(CAN_FILTER) bctx.filter='blur('+(PERIPH_MAX*DS)+'px)';
+    if(CAN_FILTER) bctx.filter='blur('+brad+'px)';
     bctx.drawImage(wsrcCv, 0,0);
     bctx.filter='none';
     // 3) グラデーションで抜いて、鮮明な絵の上に重ねる
@@ -602,6 +635,25 @@ function frame(ms){
 
   requestAnimationFrame(frame);
 }
+
+// ── タイトル ───────────────────────────────────────────────
+//  絵は裏で回したままタイトルを被せておき、外すと同時にゲームが始まる。
+//  ここが唯一確実な「ユーザー操作」なので、音のアンロックもこの1回に賭ける。
+let started=false;
+function startGame(){
+  if(started) return;
+  started=true;
+  unlockAudio();
+  const s=el('start');
+  s.classList.add('off');
+  el('hint').classList.add('go');
+  setTimeout(()=>{ s.style.display='none'; }, 700);   // 透明でも重なっていると邪魔なので外す
+}
+el('start').addEventListener('pointerdown', startGame);
+el('start').addEventListener('click', startGame);     // pointerdown が来ない経路の保険
+el('start').addEventListener('keydown', e=>{
+  if(e.key===' '||e.key==='Enter'){ e.preventDefault(); startGame(); }
+});
 
 // 初期状態：カエル、ハエは右目に固定
 (function init(){

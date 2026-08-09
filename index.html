@@ -4,16 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>zoom</title>
-<meta name="theme-color" content="#f0f0ee">
+<meta name="theme-color" content="#ffffff">
 <meta name="color-scheme" content="light">
 <meta property="og:type" content="website">
 <meta property="og:title" content="zoom">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23f0f0ee'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a1a1a' stroke-width='2'/%3E%3Cellipse cx='16' cy='16' rx='6' ry='2' fill='%231a1a1a'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23ffffff'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a1a1a' stroke-width='2'/%3E%3Cellipse cx='16' cy='16' rx='6' ry='2' fill='%231a1a1a'/%3E%3C/svg%3E">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body {
     height:100%; overflow:hidden; position:fixed; inset:0;
-    overscroll-behavior:none; background:#f0f0ee;
+    overscroll-behavior:none; background:#fff;
     -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
   }
   canvas { display:block; width:100%; height:100%; touch-action:none; }
@@ -31,20 +31,15 @@
   .start {
     position:fixed; inset:0; z-index:10; cursor:pointer;
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    background:rgba(240,240,238,.955); color:#1a1a1a;
+    background:#dcdcdc; color:#1a1a1a;
     -webkit-tap-highlight-color:transparent;
     transition:opacity .6s ease;
   }
   .start.off { opacity:0; pointer-events:none; }
-  .ttl {
-    font-family:"Hiragino Mincho ProN", "Yu Mincho", YuMincho, serif;
-    font-size:clamp(46px, 18vw, 96px); line-height:1;
-    letter-spacing:.24em; text-indent:.24em;   /* 字間を空けたぶん中央がずれるので同量ぶら下げる */
-  }
-  .rule { width:min(230px, 54vw); height:1px; background:rgba(26,26,26,.26); margin:30px 0 24px; }
   .go, .note {
     font:12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.2em; white-space:nowrap;
   }
+  .go { font-size:14px; }
   .go { animation:breathe 2.6s ease-in-out infinite; }
   .note { margin-top:15px; font-size:11px; letter-spacing:.16em; opacity:.42; }
   @keyframes breathe { 0%,100%{opacity:.85} 50%{opacity:.38} }
@@ -57,20 +52,18 @@
 
 <canvas id="cv"></canvas>
 <div class="hint" id="hint">ハエに寄る</div>
-<div class="start" id="start" role="button" tabindex="0" aria-label="複眼 — クリックしてスタート">
-  <div class="ttl">複眼</div>
-  <div class="rule"></div>
+<div class="start" id="start" role="button" tabindex="0" aria-label="クリックしてスタート">
   <div class="go">クリックしてスタート</div>
-  <div class="note">音が流れます</div>
+  <div class="note">音が出ます</div>
 </div>
 
 <script>
 // ═══════════════════════════════════════════════════════════
-//  ズーム遷移ギミック プロト / 白黒・手描きスケッチ
+//  ズーム遷移ギミック / シーンは scenes/flow.json から読む
 //
-//  連鎖：カエルの目 → タコの目 →（ハエ移動）→ タコの吸盤
-//        → イカの吸盤 →（ハエ移動）→ イカの別の吸盤
-//        → カエルの指の吸盤 →（ハエ移動）→ カエルの目 …
+//  連鎖は editor.html で編集する。各シーン画像は正方形領域を2つ持つ：
+//    zoom … ここへ寄り切ると次のシーンへ（＝ハエの止まり場所）
+//    land … 前のシーンの zoom が、この位置・大きさで重なって現れる
 //
 //  ・ハエの止まっている箇所＝次にズームインする箇所（ワールド原点）
 //  ・切り替わりが確定したら、引いたタイミングでハエが飛び、着地で固定
@@ -100,7 +93,7 @@ if(window.ResizeObserver) new ResizeObserver(resize).observe(cv);
 // ── チューニング定数 ───────────────────────────────────────
 // 倍率の上下限は「壁」ではなく数値が壊れないための保険。表示UIが無いので広く取ってある
 const MIN_ZOOM=-3.2, MAX_ZOOM=8.5;
-const SWAP_HI  = 4.35;   // ここまで寄ると入れ替わり確定
+const SWAP_HI  = 3.4;    // ここまで寄ると入れ替わり確定。下げるほど浅い寄りで入れ替わる（ゆるい）
 const FADE_W   = 0.8;    // クロスフェードにかける zoom 幅
 const MOVE_OUT = 0.75;   // ここまで引くとハエが次の場所へ飛ぶ
 const MOVE_WAIT= 0.7;    // 引いてから飛び立つまでの間
@@ -203,16 +196,83 @@ const CLICK_VOL   = 0.42;
 
 let AC=null, clickBuf=null, clickOut=null, lastNotch=null, nextAt=0, clickSeed=0, prevZoomA=null;
 
+// ── BGM と切り替わり音 ─────────────────────────────────────
+//  BGMは2曲を同時にループで走らせておき、シーンが替わるたびにゲインだけ入れ替える。
+//  曲を頭出しし直さないので、フェードが「ぬるっ」と繋がる。
+//  正解（ハエの居る特徴＝ワールド原点）へ寄るほど BGM を絞る。
+const BGM_VOL   = 0.5;    // 通常音量
+const BGM_DUCK  = 0.15;   // 寄り切ったときに残る音量（BGM_VOL に対する倍率）
+const BGM_XFADE = 1.8;    // 入れ替えフェードの長さ（秒）
+const SWAP_VOL  = 0.9;    // 切り替わり音の音量
+
+let bgmBufs=[null,null], swapBuf=null;
+let bgmBus=null, bgmTrkGain=null, bgmCur=0, bgmOn=false, bgmVolNow=BGM_VOL;
+
+function loadBuf(url, set){
+  fetch(url).then(r=>r.arrayBuffer())
+    // Safari は Promise を返さない旧シグネチャなのでコールバック版で受ける
+    .then(b=>new Promise((ok,ng)=>AC.decodeAudioData(b,ok,ng)))
+    .then(set)
+    .catch(()=>{});                        // 鳴らなくても遊べる。握り潰す
+}
+
 function initAudio(){
   if(AC) return;
   const C=window.AudioContext||window.webkitAudioContext; if(!C) return;
   AC=new C();
   clickOut=AC.createGain(); clickOut.gain.value=CLICK_VOL; clickOut.connect(AC.destination);
-  fetch('dial.mp3').then(r=>r.arrayBuffer())
-    // Safari は Promise を返さない旧シグネチャなのでコールバック版で受ける
-    .then(b=>new Promise((ok,ng)=>AC.decodeAudioData(b,ok,ng)))
-    .then(b=>{ clickBuf=b; })
-    .catch(()=>{ clickBuf=null; });        // 鳴らなくても遊べる。握り潰す
+  bgmBus=AC.createGain(); bgmBus.gain.value=BGM_VOL; bgmBus.connect(AC.destination);
+  loadBuf('dial.mp3',  b=>{ clickBuf=b; });
+  loadBuf('bgm01.mp3', b=>{ bgmBufs[0]=b; });
+  loadBuf('bgm02.mp3', b=>{ bgmBufs[1]=b; });
+  loadBuf('swap.mp3',  b=>{ swapBuf=b; });
+}
+
+// ゲーム開始後、バッファが揃いしだい2曲同時に流し始める（鳴るのは片方だけ）
+function startBgm(){
+  if(bgmOn || !AC || AC.state!=='running' || !bgmBufs[0] || !bgmBufs[1]) return;
+  bgmTrkGain=bgmBufs.map((b,i)=>{
+    const s=AC.createBufferSource(); s.buffer=b; s.loop=true;
+    const g=AC.createGain(); g.gain.value = i===bgmCur ? 1 : 0;
+    s.connect(g); g.connect(bgmBus); s.start();
+    return g;
+  });
+  bgmOn=true;
+}
+
+// シーン切り替わりの瞬間：SFX を1発 ＋ BGM を反対の曲へクロスフェード
+function sceneSwapAudio(){
+  if(!AC || AC.state!=='running'){ bgmCur=1-bgmCur; return; }
+  if(swapBuf){
+    const s=AC.createBufferSource(); s.buffer=swapBuf;
+    const g=AC.createGain(); g.gain.value=SWAP_VOL;
+    s.connect(g); g.connect(AC.destination); s.start();
+  }
+  const nxt=1-bgmCur;
+  if(bgmOn){
+    const now=AC.currentTime;
+    [[bgmCur,0],[nxt,1]].forEach(([i,v])=>{
+      const g=bgmTrkGain[i].gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(v, now+BGM_XFADE);
+    });
+  }
+  bgmCur=nxt;
+}
+
+function bgmUpdate(dt){
+  if(started) startBgm();               // バッファ到着待ちがあるので毎フレーム試す（済んでいれば即return）
+  if(!bgmOn) return;
+  // 「正解に近い」＝ 深く寄っていて、かつ狙いの特徴が画面中央付近にあること
+  const d=Math.hypot(camX,camY)*scale();                    // 原点の画面中心からのズレ（画面px）
+  const near=1-Math.min(1, d/(Math.min(W,H)*0.6));
+  const deep=smoothstep(1.0, SWAP_HI, zoom);
+  const prox=near*deep;
+  const target=BGM_VOL*(1-(1-BGM_DUCK)*prox);
+  // 急に絞ると耳につくので毎フレーム指数的に寄せる
+  bgmVolNow += (target-bgmVolNow)*(1-Math.exp(-dt/0.12));
+  bgmBus.gain.value=bgmVolNow;
 }
 // 音は必ずユーザー操作から起こす（モバイルは自動再生できない）
 function unlockAudio(){
@@ -285,21 +345,6 @@ function roughEll(cx,cy,rx,ry,rot,seed,amp){
   }
   ctx.closePath();
 }
-function roughArm(x1,y1,cx,cy,x2,y2,w,seed){
-  const path=[], N=15;
-  for(let i=0;i<=N;i++){
-    const t=i/N, mt=1-t;
-    const x=mt*mt*x1+2*mt*t*cx+t*t*x2, y=mt*mt*y1+2*mt*t*cy+t*t*y2;
-    const dx=2*mt*(cx-x1)+2*t*(x2-cx), dy=2*mt*(cy-y1)+2*t*(y2-cy);
-    const L=Math.hypot(dx,dy)||1;
-    const hw=w*(1-t*0.5)*(1+n(seed+i)*0.09);
-    path.push([x-dy/L*hw, y+dx/L*hw, x+dy/L*hw, y-dx/L*hw]);
-  }
-  ctx.beginPath();
-  path.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
-  for(let i=path.length-1;i>=0;i--) ctx.lineTo(path[i][2], path[i][3]);
-  ctx.closePath();
-}
 // 塗り → クリップしてハッチング → インク輪郭。ext はハッチの走査範囲（描画量に直結）
 function ink(pathFn, wash, ang, spacing, seed, lw, ext){
   pathFn(); ctx.fillStyle=wash; ctx.fill();
@@ -320,159 +365,82 @@ function ink(pathFn, wash, ang, spacing, seed, lw, ext){
   pathFn(); ctx.strokeStyle=INK; ctx.lineWidth=(lw||2.6)*PX;
   ctx.lineJoin='round'; ctx.stroke();
 }
-function at(x,y,fn){ ctx.save(); ctx.translate(x,y); fn(); ctx.restore(); }
+// ── シーン（scenes/flow.json）───────────────────────────────
+//  ワールド座標は「いまのアンカー領域の中心が原点・半径 R0」になるように取る。
+//  R0 を旧ハードコード版の特徴半径と同じ値にしてあるので、
+//  SWAP_HI / MOVE_OUT / BGM の寄り判定などの調整値がそのまま効く。
+const R0 = 58;
+let SCENES = null;                 // 読み込み完了で [{img,w,h,land,zoom}] になる
+let fitPending = false;            // 画面寸法が取れてから初期倍率を合わせるための保留
 
-// ── アンカーになる特徴（すべて半径58・同じ明度帯に揃える）─────
-function featFrogEye(){                       // カエルの目
-  ink(()=>roughEll(0,0,58,56,0,11), '#f2f2f2', -0.5, 13, 21, 3.2, 70);
-  ink(()=>roughEll(0,0,37,36,0,31), '#c0c0c0',  0.8,  8, 41, 2.4, 45);
-  ink(()=>roughEll(0,0,30,9,0,51),  '#1a1a1a',  0,    0, 61, 2.2);   // 横長の瞳孔
-  ctx.fillStyle='#fbfbfb'; roughEll(-19,-21,10,8,0,71); ctx.fill();
-}
-function featOctoEye(){                       // タコの目（カエルとほぼ同じ構造）
-  ink(()=>roughEll(0,0,58,56,0,14), '#eeeeee',  0.4, 13, 24, 3.2, 70);
-  ink(()=>roughEll(0,0,38,35,0,34), '#bcbcbc', -1.0,  8, 44, 2.4, 45);
-  ctx.fillStyle='#1a1a1a';                                          // 長方形の瞳孔
-  roughEll(0,0,31,8,0,54,0.03); ctx.fill();
-  ctx.strokeStyle=INK; ctx.lineWidth=2.2*PX; ctx.stroke();
-  ctx.strokeStyle='rgba(26,26,26,.45)'; ctx.lineWidth=3*PX;         // まぶたの皺
-  ctx.beginPath(); ctx.moveTo(-56,-30); ctx.quadraticCurveTo(0,-52,56,-26); ctx.stroke();
-  ctx.fillStyle='#fbfbfb'; roughEll(-20,-20,9,7,0,74); ctx.fill();
-}
-function featOctoSucker(){                    // タコの吸盤
-  ink(()=>roughEll(0,0,58,57,0,12), '#eaeaea', 0.6, 12, 22, 3.2, 70);
-  ink(()=>roughEll(0,0,42,41,0,32), '#c6c6c6', 2.1,  8, 42, 2.4, 50);
-  ink(()=>roughEll(0,0,24,23,0,52), '#4c4c4c', 0,    0, 62, 2.2);
-  ctx.fillStyle='#fbfbfb'; roughEll(-20,-22,12,9,0,72); ctx.fill();
-}
-function featSquidSucker(){                   // イカの吸盤（角質環）
-  ink(()=>roughEll(0,0,58,57,0,13), '#ececec', -0.9, 12, 23, 3.2, 70);
-  ink(()=>roughEll(0,0,42,41,0,33), '#c2c2c2',  1.4,  8, 43, 2.4, 50);
-  ctx.beginPath();
-  for(let i=0;i<22;i++){
-    const a=i/22*Math.PI*2, r=(i%2?26:37)*(1+n(90+i)*0.09);
-    const x=Math.cos(a)*r, y=Math.sin(a)*r;
-    i?ctx.lineTo(x,y):ctx.moveTo(x,y);
-  }
-  ctx.closePath(); ctx.fillStyle='#3d3d3d'; ctx.fill();
-  ctx.strokeStyle=INK; ctx.lineWidth=2.2*PX; ctx.stroke();
-  ctx.fillStyle='#fbfbfb'; roughEll(-19,-21,11,8,0,73); ctx.fill();
-}
-function featFrogToe(){                       // カエルの指の吸盤（趾間板）
-  ink(()=>roughEll(0,0,58,55,0,15), '#e8e8e8', 1.1, 12, 25, 3.2, 70);
-  ink(()=>roughEll(0,2,41,38,0,35), '#cacaca', -0.3, 9, 45, 2.4, 50);
-  ctx.strokeStyle='rgba(26,26,26,.5)'; ctx.lineWidth=2.4*PX;        // 同心の畝
-  for(let i=1;i<=3;i++){ roughEll(0,3,10+i*8, 9+i*7,0,55+i*4); ctx.stroke(); }
-  ctx.fillStyle='#5a5a5a'; roughEll(0,4,11,10,0,75); ctx.fill();
-  ctx.fillStyle='#fbfbfb'; roughEll(-20,-20,11,8,0,85); ctx.fill();
-}
-// 小さい方の吸盤（アンカーでないもの）
-function smallSucker(r, dark, seed){
-  ink(()=>roughEll(0,0,r,r*0.97,0,seed), '#e6e6e6', 0.6, r/4, seed+3, 2.2, r+10);
-  ink(()=>roughEll(0,0,r*0.46,r*0.44,0,seed+7), dark, 0, 0, seed+9, 2);
-}
+const fallbackRegion = s => ({ x:s.w/2, y:s.h/2, r:Math.min(s.w,s.h)*0.18 });
+// name は 'zoom' か 'land'。1枚だけの flow でも落ちないよう中央に保険の領域を置く
+const regionOf = (i,name) => SCENES[i][name] || fallbackRegion(SCENES[i]);
 
-// ── 生き物（ローカル座標。anchors がワールド原点に来る）────────
-function drawFrog(){
-  // 前脚と指
-  ink(()=>roughArm(-230,110,-330,240,-425,352,58,701), '#d4d4d4', 0.5, 22, 706, 2.6, 300);
-  ink(()=>roughArm(-425,352,-470,372,-500,400,34,711), '#d4d4d4', 0.5, 16, 716, 2.4, 90);
-  ink(()=>roughArm(-420,358,-445,450,-432,500,30,721), '#d4d4d4', 0.5, 16, 726, 2.4, 110);
-  ink(()=>roughArm(-412,362,-378,470,-332,518,28,731), '#d4d4d4', 0.5, 16, 736, 2.4, 120);
-  // 後脚・胴・頭
-  ink(()=>roughEll(300,420,178,96,-0.45,101), '#d2d2d2', 0.4, 22, 111, 2.6, 220);
-  ink(()=>roughEll(0,150,335,245,0,121),      '#dcdcdc', -0.6, 26, 131, 2.6, 400);
-  ink(()=>roughEll(0,-110,300,198,0,141),     '#e4e4e4',  0.9, 24, 151, 2.6, 360);
-  // 斑点と口
-  ctx.strokeStyle='rgba(26,26,26,.42)'; ctx.lineWidth=3*PX; ctx.lineCap='round';
-  [[110,190,52,33],[-90,270,40,26],[210,60,33,21],[30,320,28,18]].forEach((s,i)=>{
-    roughEll(s[0],s[1],s[2],s[3],0,161+i*7); ctx.stroke(); });
-  ctx.strokeStyle=INK; ctx.lineWidth=5*PX;
-  ctx.beginPath(); ctx.moveTo(-190,-30); ctx.quadraticCurveTo(0,72,175,-38); ctx.stroke();
-  // 目の隆起 → 目
-  ink(()=>roughEll(-165,-250,95,88,0,171), '#e4e4e4', 0.2, 20, 181, 2.6, 110);
-  ink(()=>roughEll(160,-262,95,88,0,191),  '#e4e4e4', 0.2, 20, 201, 2.6, 110);
-  at(-165,-250, featFrogEye);
-  at( 160,-262, featFrogEye);
-  // 指先の吸盤
-  at(-432,500, ()=>smallSucker(44,'#5a5a5a',241));
-  at(-332,518, ()=>smallSucker(41,'#5a5a5a',251));
-  at(-500,400, featFrogToe);                                  // ← anchor: toe
-}
-
-function drawOcto(){
-  [[-120,-200,-350,150,-480,520,60,301],
-   [ -40,-190, -80,200,  60,600,54,311],
-   [  60,-200, 320, 60, 620,300,48,321]].forEach(a=>
-    ink(()=>roughArm(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7]), '#d6d6d6', 0.7, 20, a[7]+5, 2.6, 420));
-  ink(()=>roughArm(-20,-190,100,120,470,470,88,331), '#e0e0e0', 1.1, 18, 336, 2.6, 400);
-  ink(()=>roughEll(0,-420,255,300,0.08,341), '#d8d8d8', -0.4, 26, 351, 2.6, 330);
-  ctx.strokeStyle='rgba(26,26,26,.32)'; ctx.lineWidth=3*PX;
-  [[-60,-560,110,58,0.2],[80,-330,70,42,-0.3],[-140,-240,55,32,0.4]].forEach((s,i)=>{
-    roughEll(s[0],s[1],s[2],s[3],s[4],391+i*9); ctx.stroke(); });
-  ink(()=>roughEll(150,-430,42,36,0,371), '#eeeeee', 0, 0, 376, 2.4);   // 反対側の目
-  ctx.fillStyle='#1a1a1a'; roughEll(150,-430,22,7,0,381); ctx.fill();
-  at( 60,-30, ()=>smallSucker(40,'#4c4c4c',261));
-  at(150, 90, ()=>smallSucker(45,'#4c4c4c',271));
-  at(330,330, ()=>smallSucker(43,'#4c4c4c',281));
-  at(-165,-430, featOctoEye);                                 // ← anchor: eye
-  at( 225, 210, featOctoSucker);                              // ← anchor: sucker
-}
-
-function drawSquid(){
-  ink(()=>roughEll(-190,-880,150,105,0.5,541), '#d0d0d0', 0.5, 20, 551, 2.6, 170);
-  ink(()=>roughEll( -10,-870,150,105,-0.5,561),'#d0d0d0', -0.5, 20, 571, 2.6, 170);
-  [[-200,-380,-300,  0,-380,480,44,501],
-   [-100,-370, -60,100, 100,620,40,511],
-   [   0,-380, 260,-60, 600,240,38,521]].forEach(a=>
-    ink(()=>roughArm(a[0],a[1],a[2],a[3],a[4],a[5],a[6],a[7]), '#dadada', -0.8, 20, a[7]+5, 2.6, 420));
-  ink(()=>roughArm(-60,-360,60,60,520,500,80,531), '#e2e2e2', 1.5, 18, 536, 2.6, 420);
-  ink(()=>roughEll(-100,-620,180,340,0.06,581), '#dbdbdb', 1.2, 24, 591, 2.6, 360);
-  ctx.strokeStyle='rgba(26,26,26,.3)'; ctx.lineWidth=3*PX;
-  for(let i=0;i<4;i++){ ctx.beginPath();
-    ctx.moveTo(-190+i*44,-840); ctx.quadraticCurveTo(-175+i*44,-660,-160+i*40,-460); ctx.stroke(); }
-  ink(()=>roughEll(-150,-390,46,40,0,601), '#f2f2f2', 0, 0, 611, 2.4);
-  ctx.fillStyle='#1a1a1a'; roughEll(-150,-390,21,20,0,621); ctx.fill();
-  at(145, 65, ()=>smallSucker(45,'#3d3d3d',291));
-  at(345,300, ()=>smallSucker(43,'#3d3d3d',295));
-  at(240,195, featSquidSucker);                               // ← anchor: sucker
-  at(475,456, featSquidSucker);                               // ← anchor: sucker2
-}
-
-const CREATURES=[
-  { draw:drawFrog,  anchors:{ eye:[160,-262],  toe:[-500,400] } },
-  { draw:drawOcto,  anchors:{ eye:[-165,-430], sucker:[225,210] } },
-  { draw:drawSquid, anchors:{ sucker:[240,195], sucker2:[475,456] } },
-];
-
-// land = その生き物に切り替わった瞬間にハエが居る特徴
-// zoom = ハエが移動したあと、次にズームインする特徴
-const CHAIN=[
-  { c:0, land:'toe',    zoom:'eye'     },  // カエル：指の吸盤に着地 → 目へ
-  { c:1, land:'eye',    zoom:'sucker'  },  // タコ  ：目に着地      → 吸盤へ
-  { c:2, land:'sucker', zoom:'sucker2' },  // イカ  ：吸盤に着地    → 別の吸盤へ
-];
+fetch('scenes/flow.json', {cache:'no-store'})
+  .then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); })
+  .then(flow=>Promise.all((flow.scenes||[]).map(fs=>new Promise((ok,ng)=>{
+    const img=new Image();
+    img.onload =()=>ok({ img, w:img.naturalWidth, h:img.naturalHeight,
+                         land:fs.land||null, zoom:fs.zoom||null });
+    img.onerror=()=>ng(new Error(fs.file));
+    img.src='scenes/'+encodeURIComponent(fs.file);
+  }))))
+  .then(list=>{ if(!list.length) throw new Error('empty'); SCENES=list; initScene(); })
+  .catch(()=>{     // file:// 直開きや flow 未作成。遊べないことだけタイトルに出す
+    const g=document.querySelector('.go');
+    if(g) g.textContent='scenes/flow.json が読めない';
+  });
 
 // ── 状態 ───────────────────────────────────────────────────
-let node=0, activeAnchor='eye', armed=true, blend=0;
-let pendingAnchor=null, moveWait=0;
-const PAPER='#f0f0ee';
+//  activeAnchor：いまワールド原点に据えている領域。'zoom'＝次への判定、'land'＝着地点
+let node=0, activeAnchor='zoom', armed=false, blend=0;
+let pendingAnchor=false, moveWait=0;
+const PAPER='#ffffff';
 const smoothstep=(a,b,x)=>{const t=Math.max(0,Math.min(1,(x-a)/(b-a))); return t*t*(3-2*t);};
+const hasNext=()=>!!(SCENES && node+1<SCENES.length && SCENES[node].zoom);
 
-function reanchor(name){
-  const cr=CREATURES[CHAIN[node].c];
-  const A1=cr.anchors[activeAnchor], A2=cr.anchors[name];
-  const dx=A1[0]-A2[0], dy=A1[1]-A2[1];           // ワールド全体が (A1-A2) ずれる
-  camX+=dx; camY+=dy;
-  fly.x+=dx; fly.y+=dy; fly.fx+=dx; fly.fy+=dy; fly.tx+=dx; fly.ty+=dy;
-  activeAnchor=name;
+function initScene(){
+  node=0;
+  activeAnchor = SCENES[0].zoom ? 'zoom' : 'land';
+  armed = hasNext();                             // 最初からハエは判定の上に居る
+  const sc=SCENES[0], a=regionOf(0,activeAnchor), k=R0/a.r;
+  camX=(sc.w/2-a.x)*k; camY=(sc.h/2-a.y)*k;      // 絵の中心を画面中央に
+  fly.x=fly.fx=fly.tx=0; fly.y=fly.fy=fly.ty=0; fly.t=1;
+  fitScene();
+}
+function fitScene(){                             // 絵全体が収まる倍率から始める
+  if(!W || !H){ fitPending=true; return; }
+  fitPending=false;
+  const sc=SCENES[node], a=regionOf(node,activeAnchor), k=R0/a.r;
+  zoom=Math.max(MIN_ZOOM, Math.log2(Math.min(W/(sc.w*k), H/(sc.h*k))*0.92/fit()));
+  zoomTarget=zoom;
+}
+
+// ハエが land から zoom へ移ったら、ワールドの基準も zoom 領域へ据え替える。
+// 領域の半径が違うとワールドの縮尺ごと変わるので、zoom 値を同じだけずらして
+// 画面上の見た目は1pxも動かさない
+function reanchor(){
+  const A1=regionOf(node,activeAnchor), A2=SCENES[node].zoom;
+  const k1=R0/A1.r, k2=R0/A2.r;
+  const mx=x=>(x/k1+(A1.x-A2.x))*k2, my=y=>(y/k1+(A1.y-A2.y))*k2;
+  camX=mx(camX); camY=my(camY);
+  fly.x=mx(fly.x); fly.y=my(fly.y);
+  fly.fx=mx(fly.fx); fly.fy=my(fly.fy);
+  fly.tx=mx(fly.tx); fly.ty=my(fly.ty);
+  const dz=Math.log2(k2/k1);
+  zoom-=dz; zoomTarget-=dz;
+  lastNotch=null; prevZoomA=null;                // ダイヤル音の基準も取り直す（据え替えで鳴らさない）
+  activeAnchor='zoom';
 }
 function updateStage(){
-  const t=smoothstep(swapLo, SWAP_HI, zoom);
+  if(!SCENES) return;
+  const t=(armed && hasNext()) ? smoothstep(swapLo, SWAP_HI, zoom) : 0;
   if(armed && t>=0.999){
-    node=(node+1)%CHAIN.length;
-    activeAnchor=CHAIN[node].land;               // B は既にこの基準で描かれているので継ぎ目なし
+    node++;
+    activeAnchor='land';                         // B は既にこの基準で描かれているので継ぎ目なし
     armed=false; moveWait=MOVE_WAIT;
+    sceneSwapAudio();                            // 切り替わり音 ＋ BGM 入れ替え
   }
   blend = armed ? t : 0;
 }
@@ -493,44 +461,57 @@ function flyUpdate(dt){
     const bow=Math.sin(e*Math.PI)*fly.arc;
     fly.x=fly.fx+dx*e-dy*bow; fly.y=fly.fy+dy*e+dx*bow;
     // カメラは追従させない。視点の主導権は常にプレイヤー側にある
-    if(fly.t>=1 && pendingAnchor){ reanchor(pendingAnchor); pendingAnchor=null; armed=true; }
+    if(fly.t>=1 && pendingAnchor){ pendingAnchor=false; reanchor(); armed=true; }
     return;
   }
-  if(!armed && !pendingAnchor && zoom<MOVE_OUT){  // 引いたら次の場所へ飛び立つ
+  if(!armed && !pendingAnchor && hasNext() && zoom<MOVE_OUT){  // 引いたら次の場所へ飛び立つ
     moveWait-=dt;
     if(moveWait<=0){
-      const cr=CREATURES[CHAIN[node].c];
-      const A1=cr.anchors[activeAnchor], A2=cr.anchors[CHAIN[node].zoom];
-      flyHop(A2[0]-A1[0], A2[1]-A1[1]);
-      pendingAnchor=CHAIN[node].zoom;
+      const A1=regionOf(node,activeAnchor), A2=SCENES[node].zoom, k=R0/A1.r;
+      flyHop((A2.x-A1.x)*k, (A2.y-A1.y)*k);
+      pendingAnchor=true;
     }
   }
 }
+// ハエのスプライト（hae1/hae2 の2コマを交互に出して羽ばたきにする）
+const HAE=[new Image(), new Image()]; let haeReady=false;
+{ let n=0; ['hae1.png','hae2.png'].forEach((src,i)=>{
+    HAE[i].onload=()=>{ if(++n===2) haeReady=true; };
+    HAE[i].src=src;
+  }); }
+
 function drawFly(t){
   const flying=fly.t<1;
   // 入れ替わり中と「引け」の催促中は激しく羽ばたく
-  const agit=Math.max(blend, (!armed && !pendingAnchor && zoom>=MOVE_OUT) ? 0.85 : 0);
-  const amp=(flying?10:7)+agit*40, spd=1+agit*2.6;
-  const jx=Math.sin(t*2.3*spd)*amp+Math.sin(t*5.7*spd)*amp*0.35;
-  const jy=Math.cos(t*1.9*spd)*amp*0.8+Math.cos(t*6.4*spd)*amp*0.3;
+  const agit=Math.max(blend, (!armed && !pendingAnchor && hasNext() && zoom>=MOVE_OUT) ? 0.85 : 0);
+  // 止まり際も判定の周りをノイズっぽく漂う（乱数でなく非整数比の正弦の重ね）
+  const amp=(flying?10:16)+agit*40, spd=1+agit*2.6;
+  const jx=(Math.sin(t*2.3*spd)*0.70+Math.sin(t*5.7*spd)*0.35+Math.sin(t*11.3*spd)*0.15)*amp;
+  const jy=(Math.cos(t*1.9*spd)*0.55+Math.cos(t*6.4*spd)*0.30+Math.cos(t*12.7*spd)*0.15)*amp;
   const [px,py]=toScreen(fly.x, fly.y);
-  const s=Math.max(13, Math.min(54, 14+zoom*8.2));
+  const s=Math.max(18, Math.min(60, 20+zoom*11));   // 画面px
 
   ctx.save();
   ctx.translate(px+jx, py+jy);
   ctx.rotate((flying?Math.atan2(fly.ty-fly.fy, fly.tx-fly.fx)*0.5:0)+Math.sin(t*2.1*spd)*0.3);
-  ctx.scale(s/22, s/22);
-  const keep=PX; PX=1;                            // ハエは画面座標で描く
-  const wing=Math.abs(Math.sin(t*(flying?46:28)));
-  ctx.fillStyle='rgba(255,255,255,.5)'; ctx.strokeStyle='rgba(26,26,26,.5)'; ctx.lineWidth=1;
-  roughEll(-2,-9-wing*4,13,5+wing*2.5,-0.55,801); ctx.fill(); ctx.stroke();
-  roughEll(-2, 9+wing*4,13,5+wing*2.5, 0.55,811); ctx.fill(); ctx.stroke();
-  ink(()=>roughEll(0,0,14,8.5,0,821), '#2a2a2a', 0.9, 4, 831, 1.6, 18);
-  ink(()=>roughEll(-12,0,7,6.5,0,841), '#3a3a3a', 0, 0, 851, 1.4);
-  ctx.fillStyle='#1a1a1a';
-  roughEll(-16,-3,3.5,3,0,861); ctx.fill();
-  roughEll(-16, 3,3.5,3,0,871); ctx.fill();
-  PX=keep;
+  if(haeReady){
+    const img=HAE[((t*(flying?24:14)*spd)|0)%2];    // gifっぽい2コマ切り替え
+    const w=s*1.7, h=w*(139/137);
+    ctx.drawImage(img, -w/2, -h/2, w, h);
+  }else{                                            // 画像が来るまでの保険（旧・手描きハエ）
+    ctx.scale(s/22, s/22);
+    const keep=PX; PX=1;                            // ハエは画面座標で描く
+    const wing=Math.abs(Math.sin(t*(flying?46:28)));
+    ctx.fillStyle='rgba(255,255,255,.5)'; ctx.strokeStyle='rgba(26,26,26,.5)'; ctx.lineWidth=1;
+    roughEll(-2,-9-wing*4,13,5+wing*2.5,-0.55,801); ctx.fill(); ctx.stroke();
+    roughEll(-2, 9+wing*4,13,5+wing*2.5, 0.55,811); ctx.fill(); ctx.stroke();
+    ink(()=>roughEll(0,0,14,8.5,0,821), '#2a2a2a', 0.9, 4, 831, 1.6, 18);
+    ink(()=>roughEll(-12,0,7,6.5,0,841), '#3a3a3a', 0, 0, 851, 1.4);
+    ctx.fillStyle='#1a1a1a';
+    roughEll(-16,-3,3.5,3,0,861); ctx.fill();
+    roughEll(-16, 3,3.5,3,0,871); ctx.fill();
+    PX=keep;
+  }
   ctx.restore();
 }
 
@@ -631,15 +612,15 @@ function present(t){
 }
 
 // ── 描画 ───────────────────────────────────────────────────
-function paint(nodeIdx, anchorName, alpha){
-  const cr=CREATURES[CHAIN[nodeIdx].c], a=cr.anchors[anchorName];
+function paint(idx, anchorName, alpha){
+  const sc=SCENES[idx], a=regionOf(idx, anchorName), k=R0/a.r;  // k = ワールド / 画像px
   ctx.globalAlpha=alpha;
   ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);
   ctx.save();
   const s=scale();
-  ctx.translate(W/2-camX*s, H/2-camY*s); ctx.scale(s,s);
-  ctx.translate(-a[0], -a[1]);
-  cr.draw();
+  ctx.translate(W/2-camX*s, H/2-camY*s); ctx.scale(s*k, s*k);
+  ctx.translate(-a.x, -a.y);
+  ctx.drawImage(sc.img, 0, 0);
   ctx.restore();
   ctx.globalAlpha=1;
 }
@@ -649,16 +630,19 @@ let last=0;
 
 function frame(ms){
   const t=ms/1000, dt=Math.min(0.05, last?t-last:0.016); last=t;
-  easeZoom(dt); clickAudio(dt); updateStage(); flyUpdate(dt);
+  easeZoom(dt); clickAudio(dt); bgmUpdate(dt); updateStage(); flyUpdate(dt);
   PX = 1/scale();
 
-  paint(node, activeAnchor, 1);                   // A は不透明
-  if(blend>0.001){                                // B を alpha=blend で重ねる（濁らない合成）
-    const nx=(node+1)%CHAIN.length;
-    paint(nx, CHAIN[nx].land, blend);
+  if(SCENES){
+    if(fitPending) fitScene();
+    paint(node, activeAnchor, 1);                 // A は不透明
+    if(blend>0.001 && node+1<SCENES.length)       // B を alpha=blend で重ねる（濁らない合成）
+      paint(node+1, 'land', blend);
+    drawFly(t);
+  }else{
+    ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);   // 読み込みが終わるまでは紙だけ
   }
 
-  drawFly(t);
   present(t);    // オフスクリーン → 画面（周辺だけぼかす）。枠と紙目はこの中で最後に乗る
 
   requestAnimationFrame(frame);
@@ -683,10 +667,8 @@ el('start').addEventListener('keydown', e=>{
   if(e.key===' '||e.key==='Enter'){ e.preventDefault(); startGame(); }
 });
 
-// 初期状態：カエル、ハエは右目に固定
+// 初期状態：flow.json 待ち。カメラとハエは読み込み完了時に initScene() が据える
 (function init(){
-  const a=CREATURES[0].anchors.eye;
-  camX=0-a[0]; camY=80-a[1];                      // 体の中心あたりを画面中央に
   el('hint').textContent =
     matchMedia('(pointer: coarse)').matches ? 'ピンチでハエに寄る' : 'ホイールでハエに寄る';
   resize();

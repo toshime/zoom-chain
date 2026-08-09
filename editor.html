@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zoom-chain シーンエディター</title>
+<style>
+  :root{
+    --paper:#f1efe7; --paper2:#e7e4d8; --ink:#26241f; --ink2:#6d6a60;
+    --zoomc:#b03a2e; --landc:#2e5fb0; --ok:#3a7d44;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    font-family:-apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    background:var(--paper); color:var(--ink);
+    display:flex; flex-direction:column; overflow:hidden;
+    font-size:13px;
+  }
+  header{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:8px 12px; border-bottom:1px solid #c9c5b6; background:var(--paper);
+  }
+  header h1{
+    font-family:"Hiragino Mincho ProN","Noto Serif JP",serif;
+    font-size:15px; font-weight:600; letter-spacing:.35em; margin:0 6px 0 0;
+  }
+  button{
+    font:inherit; color:var(--ink); background:#fbfaf5;
+    border:1px solid #b9b5a5; border-radius:4px; padding:4px 10px; cursor:pointer;
+  }
+  button:hover{ background:#fff; }
+  button:disabled{ opacity:.4; cursor:default; }
+  button.primary{ border-color:var(--ink); }
+  .sep{ width:1px; align-self:stretch; background:#cfcbbc; margin:0 2px; }
+  label.tgl{ display:flex; align-items:center; gap:4px; cursor:pointer; user-select:none; }
+  input[type=range]{ width:90px; }
+  #saveState{ color:var(--ink2); min-width:11em; }
+  #saveState.dirty{ color:var(--zoomc); }
+  #saveState.saved{ color:var(--ok); }
+
+  #layout{ flex:1; display:flex; min-height:0; }
+  aside{
+    width:230px; border-right:1px solid #c9c5b6; background:var(--paper2);
+    overflow-y:auto; padding:8px;
+  }
+  aside .empty{ color:var(--ink2); padding:12px 6px; line-height:1.8; }
+  .card{
+    background:#fbfaf5; border:1px solid #c2beae; border-radius:6px;
+    padding:6px; margin-bottom:4px; cursor:pointer; position:relative;
+  }
+  .card.sel{ border-color:var(--ink); box-shadow:0 0 0 1px var(--ink); }
+  .card .thumbwrap{ height:84px; display:flex; align-items:center; justify-content:center;
+    background:repeating-conic-gradient(#e5e2d5 0 25%, #f4f2ea 0 50%) 0 0/16px 16px; border-radius:3px; overflow:hidden; }
+  .card img{ max-width:100%; max-height:84px; display:block; }
+  .card .meta{ display:flex; align-items:center; gap:6px; margin-top:5px; }
+  .card .no{ font-family:ui-monospace,monospace; color:var(--ink2); }
+  .card .name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .card .ord{ display:flex; gap:2px; }
+  .card .ord button{ padding:0 6px; line-height:1.5; }
+  .arrow{ text-align:center; color:var(--ink2); line-height:1; margin:0 0 4px; font-size:11px; }
+
+  main{ flex:1; position:relative; min-width:0; }
+  #cv{ position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; }
+  #statusbar{
+    position:absolute; left:0; right:0; bottom:0;
+    display:flex; gap:16px; padding:4px 10px;
+    font-family:ui-monospace,monospace; font-size:11px; color:var(--ink2);
+    background:color-mix(in srgb, var(--paper) 88%, transparent);
+    border-top:1px solid #d5d2c4; pointer-events:none;
+  }
+  #statusbar b{ font-weight:600; }
+  .kzoom{ color:var(--zoomc); } .kland{ color:var(--landc); }
+
+  #drop{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(241,239,231,.9); z-index:40;
+    font-family:"Hiragino Mincho ProN",serif; font-size:20px; letter-spacing:.2em;
+    border:3px dashed var(--ink2);
+  }
+  #drop.on{ display:flex; }
+
+  #pvWrap{ position:fixed; inset:0; display:none; z-index:50; background:var(--paper); }
+  #pvWrap.on{ display:block; }
+  #pv{ position:absolute; inset:0; width:100%; height:100%; }
+  #pvHint{
+    position:absolute; bottom:14px; left:0; right:0; text-align:center;
+    color:var(--ink2); letter-spacing:.2em; pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>絵の連鎖</h1>
+  <button id="btnRescan" title="scenes/ の新しい画像を取り込む（編集中の判定はそのまま）">⟳ 取り込み</button>
+  <button id="btnAdd" title="画像ファイルを選んで1枚ずつ追加">＋追加</button>
+  <input type="file" id="filePick" accept="image/*" multiple style="display:none">
+  <button id="btnFolder" title="保存先フォルダを選ぶ（以後は自動保存）">📁 保存先</button>
+  <button id="btnSave" class="primary">💾 保存</button>
+  <span id="saveState"></span>
+  <span class="sep"></span>
+  <label class="tgl"><input type="checkbox" id="ckNext" checked><span style="color:var(--zoomc)">次を重ねる</span></label>
+  <label class="tgl"><input type="checkbox" id="ckPrev"><span style="color:var(--landc)">前を重ねる</span></label>
+  <input type="range" id="ghostA" min="0" max="100" value="45" title="重ねの濃さ">
+  <span class="sep"></span>
+  <button id="btnPlay">▶ プレビュー</button>
+  <button id="btnCopy">JSONコピー</button>
+</header>
+
+<div id="layout">
+  <aside id="list"><div class="empty">scenes/ に画像を入れて<br>「⟳ 再読込」<br><br>またはここに画像を<br>ドラッグ＆ドロップ</div></aside>
+  <main>
+    <canvas id="cv"></canvas>
+    <div id="statusbar"><span id="stCursor"></span><span id="stZoom" class="kzoom"></span><span id="stLand" class="kland"></span></div>
+  </main>
+</div>
+
+<div id="drop">画像をここへ</div>
+<div id="pvWrap"><canvas id="pv"></canvas><div id="pvHint">クリックで終了</div></div>
+
+<script>
+'use strict';
+/* =========================================================================
+   zoom-chain シーンエディター
+   - scenes/ の画像を並べ、各シーンに正方形の領域を2つ置く：
+       zoom（判定・朱）… ここへ寄り切ると次のシーンへ
+       land（着地・藍）… 前のシーンの zoom がこの位置・大きさに重なる
+   - 一方向の連鎖のみ。ループ・分岐なし。
+   - 出力は scenes/flow.json（保存先フォルダを選べば自動保存）
+   ========================================================================= */
+
+const SCENE_DIR = 'scenes';
+const IMG_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
+const FRAME_RATIO = 0.62;          // 本体の FRAME_SIZE と同じ：判定枠が画面短辺に占める比
+
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+const state = {
+  scenes: [],        // {file, img, url, w, h, zoom:{x,y,r}|null, land:{x,y,r}|null}
+  sel: -1,
+  cam: { x:0, y:0, z:1 },
+  dirHandle: null,
+  dirty: false,
+  saveTimer: 0,
+};
+
+/* ---------------- 保存状態の表示 ---------------- */
+function setSaveState(cls, text){
+  const el = $('saveState');
+  el.className = cls; el.textContent = text;
+}
+function markDirty(){
+  state.dirty = true;
+  if (state.dirHandle){
+    setSaveState('dirty','変更あり…');
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(saveFlow, 700);
+  } else {
+    setSaveState('dirty','未保存（💾 か 📁 で保存）');
+  }
+}
+
+/* ---------------- flow.json ---------------- */
+function serializeFlow(){
+  const n = state.scenes.length;
+  return {
+    version: 1,
+    scenes: state.scenes.map((s,i)=>({
+      file: s.file, w: s.w, h: s.h,
+      land: i>0     && s.land ? rnd(s.land) : null,
+      zoom: i<n-1   && s.zoom ? rnd(s.zoom) : null,
+    })),
+  };
+  function rnd(a){ return { x:+a.x.toFixed(1), y:+a.y.toFixed(1), r:+a.r.toFixed(1) }; }
+}
+
+function applyFlow(flow){
+  if (!flow || !Array.isArray(flow.scenes)) return;
+  const byFile = new Map(state.scenes.map(s=>[s.file, s]));
+  const ordered = [];
+  for (const fs of flow.scenes){
+    const s = byFile.get(fs.file);
+    if (!s) continue;
+    if (fs.zoom) s.zoom = { ...fs.zoom };
+    if (fs.land) s.land = { ...fs.land };
+    ordered.push(s); byFile.delete(fs.file);
+  }
+  const rest = [...byFile.values()].sort((a,b)=>a.file.localeCompare(b.file, undefined, {numeric:true}));
+  state.scenes = [...ordered, ...rest];
+}
+
+function ensureRegions(){
+  const n = state.scenes.length;
+  state.scenes.forEach((s,i)=>{
+    const def = ()=>({ x:s.w/2, y:s.h/2, r:Math.min(s.w,s.h)*0.18 });
+    if (i < n-1 && !s.zoom) s.zoom = def();
+    if (i > 0   && !s.land) s.land = def();
+  });
+}
+
+async function saveFlow(){
+  const json = JSON.stringify(serializeFlow(), null, 2);
+  if (state.dirHandle){
+    try{
+      const fh = await state.dirHandle.getFileHandle('flow.json', { create:true });
+      const w = await fh.createWritable();
+      await w.write(json); await w.close();
+      state.dirty = false;
+      setSaveState('saved','保存済 ' + SCENE_DIR + '/flow.json');
+      return;
+    }catch(e){ console.warn('直接保存に失敗', e); }
+  }
+  // フォールバック：ダウンロード（scenes/ に手で入れる）
+  const blob = new Blob([json], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'flow.json'; a.click();
+  URL.revokeObjectURL(a.href);
+  setSaveState('saved','flow.json をダウンロード（scenes/ へ）');
+}
+
+/* ---------------- フォルダ読み込み ---------------- */
+async function loadImage(url){
+  return new Promise((ok, ng)=>{
+    const img = new Image();
+    img.onload = ()=>ok(img);
+    img.onerror = ()=>ng(new Error('load fail: '+url));
+    img.src = url;
+  });
+}
+
+// python -m http.server のディレクトリ一覧をパースして scenes/ の画像を拾う
+async function listViaHttp(){
+  const res = await fetch(SCENE_DIR + '/', { cache:'no-store' });
+  if (!res.ok) throw new Error('no listing');
+  const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+  return [...doc.querySelectorAll('a')]
+    .map(a=>decodeURIComponent(a.getAttribute('href')||''))
+    .filter(n=>IMG_RE.test(n))
+    .map(n=>({ file:n, url:SCENE_DIR + '/' + encodeURIComponent(n) }));
+}
+
+async function listViaHandle(){
+  const out = [];
+  for await (const [name, h] of state.dirHandle.entries()){
+    if (h.kind === 'file' && IMG_RE.test(name)){
+      const f = await h.getFile();
+      out.push({ file:name, url:URL.createObjectURL(f) });
+    }
+  }
+  return out;
+}
+
+async function fetchFlowJson(){
+  if (state.dirHandle){
+    try{
+      const fh = await state.dirHandle.getFileHandle('flow.json');
+      return JSON.parse(await (await fh.getFile()).text());
+    }catch(_){ return null; }
+  }
+  try{
+    const res = await fetch(SCENE_DIR + '/flow.json', { cache:'no-store' });
+    return res.ok ? await res.json() : null;
+  }catch(_){ return null; }
+}
+
+// 非破壊：既存シーンと編集中の判定はそのまま、新しいファイルだけ後ろに足す。
+// flow.json を読むのは最初の一度だけ（以後はメモリ上の編集が正）。
+async function rescan(){
+  const first = !state.flowLoaded;
+  let entries = [];
+  try{
+    entries = state.dirHandle ? await listViaHandle() : await listViaHttp();
+  }catch(e){
+    if (!state.scenes.length)
+      setSaveState('dirty','scenes/ を読めない — httpサーバー経由で開くか 📁 で選択');
+    return;
+  }
+  entries.sort((a,b)=>a.file.localeCompare(b.file, undefined, {numeric:true}));
+
+  const have = new Set(state.scenes.map(s=>s.file));
+  let added = 0;
+  for (const e of entries){
+    if (have.has(e.file)) continue;
+    try{
+      const img = await loadImage(e.url);
+      state.scenes.push({ file:e.file, img, url:e.url, w:img.naturalWidth, h:img.naturalHeight, zoom:null, land:null });
+      added++;
+    }catch(err){ console.warn(err); }
+  }
+
+  if (first){
+    const flow = await fetchFlowJson();
+    if (flow) applyFlow(flow);
+    state.flowLoaded = true;
+  }
+  ensureRegions();
+
+  if (state.sel < 0 && state.scenes.length) selectScene(0);
+  else { buildList(); render(); }
+  if (added && !first) markDirty();
+  else if (!state.dirty)
+    setSaveState('saved', first ? state.scenes.length+' 枚読込' : (added ? added+' 枚追加' : '新しい画像なし'));
+}
+
+// ファイル選択やドロップから1枚ずつ追加（📁 済みなら scenes/ へも書き込む）
+async function addFiles(files){
+  const imgs = [...files].filter(f=>IMG_RE.test(f.name))
+    .sort((a,b)=>a.name.localeCompare(b.name, undefined, {numeric:true}));
+  let added = 0;
+  for (const f of imgs){
+    if (state.scenes.some(s=>s.file===f.name)) continue;
+    const url = URL.createObjectURL(f);
+    try{
+      const img = await loadImage(url);
+      state.scenes.push({ file:f.name, img, url, w:img.naturalWidth, h:img.naturalHeight, zoom:null, land:null });
+      added++;
+      if (state.dirHandle){          // フォルダにも実体を置いておく（本番が読むのは scenes/）
+        try{
+          const fh = await state.dirHandle.getFileHandle(f.name, { create:true });
+          const w = await fh.createWritable(); await w.write(f); await w.close();
+        }catch(_){}
+      }
+    }catch(_){}
+  }
+  if (added){
+    ensureRegions(); markDirty();
+    if (state.sel < 0) selectScene(0); else { buildList(); render(); }
+  }
+  return added;
+}
+
+/* ---------------- File System Access（自動保存用） ---------------- */
+const idb = {
+  open(){ return new Promise((ok,ng)=>{
+    const q = indexedDB.open('zc-editor', 1);
+    q.onupgradeneeded = ()=>q.result.createObjectStore('kv');
+    q.onsuccess = ()=>ok(q.result); q.onerror = ()=>ng(q.error);
+  })},
+  async get(k){ const db=await this.open(); return new Promise((ok,ng)=>{
+    const q=db.transaction('kv').objectStore('kv').get(k);
+    q.onsuccess=()=>ok(q.result); q.onerror=()=>ng(q.error); })},
+  async set(k,v){ const db=await this.open(); return new Promise((ok,ng)=>{
+    const q=db.transaction('kv','readwrite').objectStore('kv').put(v,k);
+    q.onsuccess=()=>ok(); q.onerror=()=>ng(q.error); })},
+};
+
+async function pickFolder(){
+  if (!window.showDirectoryPicker){
+    alert('このブラウザは直接保存に未対応。💾 でダウンロード保存を使うこと。');
+    return;
+  }
+  try{
+    const h = await showDirectoryPicker({ id:'zc-scenes', mode:'readwrite' });
+    state.dirHandle = h;
+    await idb.set('dir', h).catch(()=>{});
+    await rescan();
+    if (state.dirty) saveFlow();
+    setSaveState('saved','📁 ' + h.name + ' に自動保存');
+  }catch(_){ /* キャンセル */ }
+}
+
+async function tryRestoreFolder(){
+  try{
+    const h = await idb.get('dir');
+    if (!h) return false;
+    if (await h.queryPermission({ mode:'readwrite' }) === 'granted'){
+      state.dirHandle = h; return true;
+    }
+  }catch(_){}
+  return false;
+}
+
+/* ---------------- シーン一覧（サイドバー） ---------------- */
+function buildList(){
+  const list = $('list');
+  list.innerHTML = '';
+  if (!state.scenes.length){
+    list.innerHTML = '<div class="empty">scenes/ に画像を入れて<br>「⟳ 再読込」<br><br>またはここに画像を<br>ドラッグ＆ドロップ</div>';
+    return;
+  }
+  state.scenes.forEach((s,i)=>{
+    if (i>0){
+      const ar = document.createElement('div');
+      ar.className = 'arrow'; ar.textContent = '↓ 寄ると';
+      list.appendChild(ar);
+    }
+    const card = document.createElement('div');
+    card.className = 'card' + (i===state.sel ? ' sel':'');
+    card.innerHTML =
+      '<div class="thumbwrap"><img src="'+s.url+'" alt=""></div>' +
+      '<div class="meta"><span class="no">'+(i+1)+'</span><span class="name" title="'+s.file+'">'+s.file+'</span>' +
+      '<span class="ord"><button data-mv="-1" title="上へ">↑</button><button data-mv="1" title="下へ">↓</button></span></div>';
+    card.addEventListener('click', e=>{
+      const mv = e.target.dataset && e.target.dataset.mv;
+      if (mv){ moveScene(i, +mv); e.stopPropagation(); return; }
+      selectScene(i);
+    });
+    list.appendChild(card);
+  });
+}
+
+function moveScene(i, d){
+  const j = i + d;
+  if (j < 0 || j >= state.scenes.length) return;
+  const a = state.scenes;
+  [a[i], a[j]] = [a[j], a[i]];
+  if (state.sel === i) state.sel = j; else if (state.sel === j) state.sel = i;
+  ensureRegions();
+  buildList(); render(); markDirty();
+}
+
+function selectScene(i){
+  state.sel = i;
+  fitView();
+  buildList(); render();
+}
+
+/* ---------------- ビュー（編集キャンバス） ---------------- */
+let DPR = 1, CW = 0, CH = 0, needFit = false;
+function resize(){
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  const r = cv.getBoundingClientRect();
+  CW = r.width; CH = r.height;
+  cv.width = Math.round(CW*DPR); cv.height = Math.round(CH*DPR);
+  if (CW && CH && (needFit || state.cam.z === 0)) fitView();
+  render();
+}
+new ResizeObserver(resize).observe(cv);
+
+function fitView(){
+  const s = state.scenes[state.sel];
+  if (!s) return;
+  if (!CW || !CH){ needFit = true; return; }   // 寸法が測れたら resize() が再フィット
+  needFit = false;
+  state.cam.z = Math.min(CW/s.w, CH/s.h) * 0.88;
+  state.cam.x = s.w/2; state.cam.y = s.h/2;
+}
+const w2sX = wx => (wx - state.cam.x)*state.cam.z + CW/2;
+const w2sY = wy => (wy - state.cam.y)*state.cam.z + CH/2;
+const s2wX = sx => (sx - CW/2)/state.cam.z + state.cam.x;
+const s2wY = sy => (sy - CH/2)/state.cam.z + state.cam.y;
+
+/* 次シーンを cur の zoom 位置へ写す係数：p_cur = off + p_next * k */
+function nextMap(cur, next){
+  if (!cur.zoom || !next || !next.land) return null;
+  const k = cur.zoom.r / next.land.r;
+  return { k, ox: cur.zoom.x - next.land.x*k, oy: cur.zoom.y - next.land.y*k };
+}
+function prevMap(cur, prev){
+  if (!cur.land || !prev || !prev.zoom) return null;
+  const k = cur.land.r / prev.zoom.r;
+  return { k, ox: cur.land.x - prev.zoom.x*k, oy: cur.land.y - prev.zoom.y*k };
+}
+
+function render(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle = '#edeae0';
+  ctx.fillRect(0,0,CW,CH);
+  const s = state.scenes[state.sel];
+  updateStatus();
+  if (!s) return;
+
+  const { x:cx, y:cy, z } = state.cam;
+  ctx.save();
+  ctx.translate(CW/2, CH/2); ctx.scale(z,z); ctx.translate(-cx,-cy);
+
+  // 本体
+  ctx.shadowColor = 'rgba(0,0,0,.18)'; ctx.shadowBlur = 18/z;
+  ctx.drawImage(s.img, 0, 0);
+  ctx.shadowBlur = 0;
+
+  const alpha = +$('ghostA').value/100;
+
+  // 前を重ねる（藍）：前の絵がこの land にどう重なるか（枠内だけ覗かせる）
+  if ($('ckPrev').checked && state.sel > 0 && s.land){
+    const m = prevMap(s, state.scenes[state.sel-1]);
+    if (m){
+      const p = state.scenes[state.sel-1];
+      ctx.save(); ctx.globalAlpha = alpha;
+      ctx.beginPath(); ctx.rect(s.land.x-s.land.r, s.land.y-s.land.r, s.land.r*2, s.land.r*2); ctx.clip();
+      ctx.translate(m.ox, m.oy); ctx.scale(m.k, m.k);
+      ctx.drawImage(p.img, 0, 0);
+      ctx.restore();
+    }
+  }
+  // 次を重ねる（朱）：zoom へ寄り切ったとき次の絵がどう出るか（枠内だけ覗かせる）
+  if ($('ckNext').checked && state.sel < state.scenes.length-1 && s.zoom){
+    const m = nextMap(s, state.scenes[state.sel+1]);
+    if (m){
+      const nx = state.scenes[state.sel+1];
+      ctx.save(); ctx.globalAlpha = alpha;
+      ctx.beginPath(); ctx.rect(s.zoom.x-s.zoom.r, s.zoom.y-s.zoom.r, s.zoom.r*2, s.zoom.r*2); ctx.clip();
+      ctx.translate(m.ox, m.oy); ctx.scale(m.k, m.k);
+      ctx.drawImage(nx.img, 0, 0);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+
+  // 領域（画面座標で線幅一定に描く）
+  if (state.sel > 0 && s.land) drawRegion(s.land, '#2e5fb0', '着地 ← 前');
+  if (state.sel < state.scenes.length-1 && s.zoom) drawRegion(s.zoom, '#b03a2e', '判定 → 次');
+}
+
+function drawRegion(a, col, label){
+  const x0 = w2sX(a.x-a.r), y0 = w2sY(a.y-a.r), sz = a.r*2*state.cam.z;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.fillStyle = col + '14';
+  ctx.fillRect(x0,y0,sz,sz);
+  ctx.strokeStyle = col; ctx.lineWidth = 1.6; ctx.setLineDash([7,5]);
+  ctx.strokeRect(x0,y0,sz,sz);
+  ctx.setLineDash([]);
+  // 中心 ＋
+  ctx.beginPath();
+  ctx.moveTo(x0+sz/2-6, y0+sz/2); ctx.lineTo(x0+sz/2+6, y0+sz/2);
+  ctx.moveTo(x0+sz/2, y0+sz/2-6); ctx.lineTo(x0+sz/2, y0+sz/2+6);
+  ctx.stroke();
+  // 四隅ハンドル
+  ctx.fillStyle = col;
+  for (const [hx,hy] of corners(a))
+    ctx.fillRect(w2sX(hx)-4, w2sY(hy)-4, 8, 8);
+  // ラベル
+  ctx.font = '11px ui-monospace, monospace';
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = col;
+  ctx.fillRect(x0-1, y0-17, tw+10, 16);
+  ctx.fillStyle = '#fbfaf5';
+  ctx.fillText(label, x0+4, y0-5);
+}
+function corners(a){
+  return [[a.x-a.r,a.y-a.r],[a.x+a.r,a.y-a.r],[a.x-a.r,a.y+a.r],[a.x+a.r,a.y+a.r]];
+}
+
+function updateStatus(){
+  const s = state.scenes[state.sel];
+  $('stZoom').textContent = s && s.zoom && state.sel < state.scenes.length-1
+    ? `判定 (${s.zoom.x|0}, ${s.zoom.y|0}) r=${s.zoom.r|0}` : '';
+  $('stLand').textContent = s && s.land && state.sel > 0
+    ? `着地 (${s.land.x|0}, ${s.land.y|0}) r=${s.land.r|0}` : '';
+}
+
+/* ---------------- 入力（パン・ズーム・領域ドラッグ） ---------------- */
+let drag = null;   // {mode:'pan'|'move'|'size', region, dx, dy}
+
+function hitTest(sx, sy){
+  const s = state.scenes[state.sel];
+  if (!s) return null;
+  const regions = [];
+  if (state.sel < state.scenes.length-1 && s.zoom) regions.push(s.zoom);
+  if (state.sel > 0 && s.land) regions.push(s.land);
+  for (const a of regions){
+    for (const [hx,hy] of corners(a)){
+      if (Math.abs(w2sX(hx)-sx) < 8 && Math.abs(w2sY(hy)-sy) < 8)
+        return { mode:'size', region:a, scene:s };
+    }
+  }
+  for (const a of regions){
+    const wx = s2wX(sx), wy = s2wY(sy);
+    if (Math.abs(wx-a.x) < a.r && Math.abs(wy-a.y) < a.r)
+      return { mode:'move', region:a, dx:a.x-wx, dy:a.y-wy, scene:s };
+  }
+  return null;
+}
+const clamp = (v,lo,hi)=>Math.min(Math.max(v,lo),hi);
+
+cv.addEventListener('pointerdown', e=>{
+  cv.setPointerCapture(e.pointerId);
+  const hit = hitTest(e.offsetX, e.offsetY);
+  drag = hit || { mode:'pan', sx:e.offsetX, sy:e.offsetY, cx:state.cam.x, cy:state.cam.y };
+});
+cv.addEventListener('pointermove', e=>{
+  const sx = e.offsetX, sy = e.offsetY;
+  $('stCursor').textContent = `(${s2wX(sx)|0}, ${s2wY(sy)|0})`;
+  if (!drag){
+    const h = hitTest(sx, sy);
+    cv.style.cursor = h ? (h.mode==='size' ? 'nwse-resize' : 'move') : 'grab';
+    updateStatus();
+    return;
+  }
+  if (drag.mode === 'pan'){
+    state.cam.x = drag.cx - (sx-drag.sx)/state.cam.z;
+    state.cam.y = drag.cy - (sy-drag.sy)/state.cam.z;
+  } else if (drag.mode === 'move'){
+    drag.region.x = clamp(s2wX(sx) + drag.dx, 0, drag.scene.w);
+    drag.region.y = clamp(s2wY(sy) + drag.dy, 0, drag.scene.h);
+    markDirty();
+  } else if (drag.mode === 'size'){
+    const a = drag.region;
+    a.r = clamp(Math.max(Math.abs(s2wX(sx)-a.x), Math.abs(s2wY(sy)-a.y)),
+                8/state.cam.z, Math.max(drag.scene.w, drag.scene.h));
+    markDirty();
+  }
+  render();
+});
+addEventListener('pointerup', ()=>{ drag = null; });
+
+cv.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 33 : 1;                    // Firefox の行単位を正規化
+  const f = Math.exp(-e.deltaY*k*0.0022);
+  const wx = s2wX(e.offsetX), wy = s2wY(e.offsetY);
+  state.cam.z = Math.min(Math.max(state.cam.z*f, 0.02), 40);
+  state.cam.x = wx - (e.offsetX-CW/2)/state.cam.z;
+  state.cam.y = wy - (e.offsetY-CH/2)/state.cam.z;
+  render();
+}, { passive:false });
+
+addEventListener('keydown', e=>{
+  if (e.target.tagName === 'INPUT') return;
+  if ($('pvWrap').classList.contains('on')){ if (e.key==='Escape') stopPreview(); return; }
+  if (e.key === 'ArrowLeft'  && state.sel > 0) selectScene(state.sel-1);
+  if (e.key === 'ArrowRight' && state.sel < state.scenes.length-1) selectScene(state.sel+1);
+  if (e.key === 'f') { fitView(); render(); }
+});
+
+/* ---------------- ドラッグ＆ドロップ ---------------- */
+addEventListener('dragover', e=>{ e.preventDefault(); $('drop').classList.add('on'); });
+addEventListener('dragleave', e=>{ if (!e.relatedTarget) $('drop').classList.remove('on'); });
+addEventListener('drop', async e=>{
+  e.preventDefault(); $('drop').classList.remove('on');
+  const files = [...e.dataTransfer.files];
+  await addFiles(files);
+  const flowFile = files.find(f=>f.name.endsWith('.json'));
+  if (flowFile){
+    applyFlow(JSON.parse(await flowFile.text()));
+    ensureRegions(); buildList(); render();
+  }
+});
+
+/* ---------------- ハエ（プレビュー専用：本番と同じ2コマスプライト） ---------------- */
+const FLY = { imgs: [null, null], ok: false };
+['hae1.png','hae2.png'].forEach((src,i)=>{
+  loadImage(src).then(im=>{
+    FLY.imgs[i] = im;
+    FLY.ok = !!(FLY.imgs[0] && FLY.imgs[1]);
+  }).catch(()=>{});   // 無くても編集はできる
+});
+
+// 領域 a の周りをランダムノイズっぽく漂う（毎フレーム乱数は使わない：正弦の重ね）
+function flyWander(t, a){
+  const R = a.r*0.85;
+  const wx = Math.sin(t*0.91+1.7)*0.52 + Math.sin(t*2.31+0.4)*0.30 + Math.sin(t*7.7)*0.09;
+  const wy = Math.sin(t*1.13+4.2)*0.52 + Math.sin(t*1.87+2.1)*0.30 + Math.sin(t*8.9+1.0)*0.09;
+  return { x: a.x + wx*R, y: a.y + wy*R };
+}
+// 画面座標に2コマぱたぱたで描く（画面px固定サイズ）
+const FLY_SIZE = 24;
+function drawFlyScreen(c, sx, sy, t){
+  if (!FLY.ok) return;
+  const img = FLY.imgs[((t*18)|0) % 2];
+  c.save();
+  c.translate(sx, sy);
+  c.rotate(Math.sin(t*2.6)*0.35);
+  c.drawImage(img, -FLY_SIZE/2, -FLY_SIZE/2, FLY_SIZE, FLY_SIZE);
+  c.restore();
+}
+/* ---------------- 通しプレビュー ---------------- */
+const pv = $('pv'), pctx = pv.getContext('2d');
+let pvRAF = 0;
+
+function regionView(a, cw, ch){          // 領域が枠（短辺×FRAME_RATIO）に収まるカメラ
+  return { x:a.x, y:a.y, z: Math.min(cw,ch)*FRAME_RATIO/(2*a.r) };
+}
+function fitCam(s, cw, ch){
+  return { x:s.w/2, y:s.h/2, z: Math.min(cw/s.w, ch/s.h)*0.88 };
+}
+function drawScene(c, s, cam, cw, ch, alpha){
+  c.save();
+  c.globalAlpha = alpha;
+  c.translate(cw/2, ch/2); c.scale(cam.z, cam.z); c.translate(-cam.x, -cam.y);
+  c.drawImage(s.img, 0, 0);
+  c.restore();
+}
+const smooth = t => { t = Math.min(Math.max(t,0),1); return t*t*(3-2*t); };
+const lerp = (a,b,t) => a + (b-a)*t;
+const camLerp = (A,B,t) => ({ x:lerp(A.x,B.x,t), y:lerp(A.y,B.y,t), z:Math.exp(lerp(Math.log(A.z),Math.log(B.z),t)) });
+
+function startPreview(){
+  const n = state.scenes.length;
+  if (n === 0) return;
+  const segs = [];
+  for (let i = Math.max(state.sel,0); i < n-1; i++){
+    segs.push({ type:'in',  i,      dur:1.9 });
+    segs.push({ type:'out', i:i+1,  dur:1.6 });
+  }
+  if (!segs.length) segs.push({ type:'hold', i:Math.max(state.sel,0), dur:1.5 });
+  segs.push({ type:'hold', i:n-1, dur:1.2 });
+
+  $('pvWrap').classList.add('on');
+  const dpr = Math.min(devicePixelRatio||1, 2);
+  const r = $('pvWrap').getBoundingClientRect();
+  pv.width = Math.round(r.width*dpr); pv.height = Math.round(r.height*dpr);
+  const cw = r.width, ch = r.height;
+
+  let si = 0, t0 = performance.now();
+  function frame(now){
+    const seg = segs[si];
+    if (!seg){ stopPreview(); return; }
+    let t = (now-t0)/1000/seg.dur;
+    if (t >= 1){ si++; t0 = now; pvRAF = requestAnimationFrame(frame); return; }
+
+    pctx.setTransform(dpr,0,0,dpr,0,0);
+    pctx.fillStyle = '#f1efe7'; pctx.fillRect(0,0,cw,ch);
+
+    const s = state.scenes[seg.i];
+    let cam, blend = 0;
+    if (seg.type === 'in'){
+      const next = state.scenes[seg.i+1];
+      cam = camLerp(fitCam(s,cw,ch), regionView(s.zoom,cw,ch), smooth(t));
+      drawScene(pctx, s, cam, cw, ch, 1);
+      blend = smooth((t-0.62)/0.38);                  // 終盤でクロスフェード
+      if (blend > 0.001 && next){
+        const m = nextMap(s, next);
+        if (m) drawScene(pctx, next,
+          { x:(cam.x-m.ox)/m.k, y:(cam.y-m.oy)/m.k, z:cam.z*m.k }, cw, ch, blend);
+      }
+      // 枠のガイド
+      const F = Math.min(cw,ch)*FRAME_RATIO;
+      pctx.strokeStyle = 'rgba(38,36,31,.35)'; pctx.lineWidth = 1.5;
+      pctx.setLineDash([8,6]);
+      pctx.strokeRect((cw-F)/2,(ch-F)/2,F,F);
+      pctx.setLineDash([]);
+    } else if (seg.type === 'out'){
+      cam = camLerp(regionView(s.land,cw,ch), fitCam(s,cw,ch), smooth(t));
+      drawScene(pctx, s, cam, cw, ch, 1);
+    } else {
+      cam = fitCam(s,cw,ch);
+      drawScene(pctx, s, cam, cw, ch, 1);
+    }
+    // ハエ：この絵の「判定」の周りを漂う。寄り切る（=入れ替わる）と消える
+    if (FLY.ok && s.zoom && seg.i < n-1){
+      const tf = now/1000;
+      const p = flyWander(tf, s.zoom);
+      pctx.globalAlpha = 1 - blend;
+      drawFlyScreen(pctx, (p.x-cam.x)*cam.z + cw/2, (p.y-cam.y)*cam.z + ch/2, tf);
+      pctx.globalAlpha = 1;
+    }
+    // 進行表示
+    pctx.fillStyle = 'rgba(38,36,31,.55)';
+    pctx.font = '12px ui-monospace, monospace';
+    pctx.fillText((seg.i+1) + ' / ' + n + '  ' + state.scenes[seg.i].file, 12, 20);
+
+    pvRAF = requestAnimationFrame(frame);
+  }
+  pvRAF = requestAnimationFrame(frame);
+}
+function stopPreview(){
+  cancelAnimationFrame(pvRAF);
+  $('pvWrap').classList.remove('on');
+}
+$('pvWrap').addEventListener('click', stopPreview);
+
+/* ---------------- ボタン ---------------- */
+$('btnRescan').addEventListener('click', rescan);
+$('btnAdd').addEventListener('click', ()=>$('filePick').click());
+$('filePick').addEventListener('change', e=>{ addFiles(e.target.files); e.target.value=''; });
+$('btnFolder').addEventListener('click', pickFolder);
+$('btnSave').addEventListener('click', saveFlow);
+$('btnPlay').addEventListener('click', startPreview);
+$('btnCopy').addEventListener('click', async ()=>{
+  await navigator.clipboard.writeText(JSON.stringify(serializeFlow(), null, 2));
+  setSaveState('saved','JSONをコピーした');
+});
+$('ckNext').addEventListener('change', render);
+$('ckPrev').addEventListener('change', render);
+$('ghostA').addEventListener('input', render);
+
+/* ---------------- 起動 ---------------- */
+(async ()=>{
+  resize();
+  await tryRestoreFolder();     // 前回の保存先が許可済みならそのまま使う
+  await rescan();
+})();
+</script>
+</body>
+</html>

@@ -77,10 +77,15 @@ const FADE_W   = 0.8;    // クロスフェードにかける zoom 幅
 const MOVE_OUT = 0.75;   // ここまで引くとハエが次の場所へ飛ぶ
 const MOVE_WAIT= 0.7;    // 引いてから飛び立つまでの間
 
-// 周辺視野ぼかし
+// 周辺視野
 const PERIPH     = true; // 切るとオフスクリーンをそのまま出すだけになる
-const PERIPH_MAX = 10;   // 最も強いところのぼけ半径（画面px）
-const PERIPH_R0  = 0.22; // ここまでは素通し（画面中心〜対角半径に対する比）
+const PERIPH_MAX = 24;   // 最も強いところのぼけ半径（画面px）
+const PERIPH_R0  = 0.18; // ここまでは素通し（画面中心〜対角半径に対する比）
+const WARP       = true; // 周辺のうねり
+const WARP_MAX   = 34;   // うねりの最大振幅（画面px）
+const WARP_SCALE = 3.0;  // うねりの空間周波数。大きいほど細かい目になる
+const WARP_SPEED = 0.30; // うねりが流れる速さ
+const WARP_CELL  = 20;   // うねりの格子サイズ（ぼかしバッファのpx）。小さいほど滑らかで重い
 
 const swapLo = SWAP_HI - FADE_W;
 const fit   = () => Math.min(W,H)/1150;
@@ -429,46 +434,120 @@ const tile=document.createElement('canvas'); tile.width=tile.height=180;
 })();
 const grain=ctx.createPattern(tile,'repeat');
 
-// ── 周辺視野ぼかし ─────────────────────────────────────────
-//  中心は素通し、外に向かうほどぼける。オフスクリーンの絵を縮小してぼかし、
-//  放射グラデーションを destination-in でマスクにして、鮮明な絵の上に重ねる。
-//  縮小してからぼかすのは負荷対策。どうせぼけるので解像度は要らない。
+// ── 周辺視野：ぼかし＋うねり ───────────────────────────────
+//  中心は素通し、外へ向かうほど「ぼけ」て「うねる」。
+//
+//  off ─縮小─> wsrc ─格子ごとに平行移動─> wdst ─blur─> blurCv ─マスク─> view
+//
+//  うねりは ../ugo-sketch の perlin flow（UVをパーリンノイズで歪ませる線ブレ）を
+//  毎フレーム回せる形に落としたもの。全画素を動かす代わりに粗い格子単位で平行移動し、
+//  そのあとに掛かる blur が格子の継ぎ目を消す。縮小してから処理するのも同じ理由で、
+//  どうせぼけるので解像度は要らない。
 const CAN_FILTER=(()=>{                        // Safari 17 未満などは ctx.filter が無い
   const c=document.createElement('canvas').getContext('2d');
   c.filter='blur(2px)'; return c.filter==='blur(2px)';
 })();
-const DS = CAN_FILTER ? 0.5 : 0.12;            // filter が無い環境は縮小拡大のボケだけで代用する
-const blurCv=document.createElement('canvas'), bctx=blurCv.getContext('2d');
+const DS = CAN_FILTER ? 0.38 : 0.12;           // filter が無い環境は縮小拡大のボケだけで代用する
+
+// パーリンノイズ。../ugo-sketch の src/noise.js を1シード分に切り詰めたもの
+const NOISE=(()=>{
+  let a=1013904223;
+  const rnd=()=>{ a=(a+0x6d2b79f5)>>>0; let t=a;
+    t=Math.imul(t^(t>>>15), t|1); t^=t+Math.imul(t^(t>>>7), t|61);
+    return ((t^(t>>>14))>>>0)/4294967296; };
+  const p=new Uint8Array(256); for(let i=0;i<256;i++) p[i]=i;
+  for(let i=255;i>0;i--){ const j=(rnd()*(i+1))|0, s=p[i]; p[i]=p[j]; p[j]=s; }
+  const perm=new Uint8Array(512); for(let i=0;i<512;i++) perm[i]=p[i&255];
+  const G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+           [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+  const fd=t=>t*t*t*(t*(t*6-15)+10), lp=(x,y,t)=>x+(y-x)*t;
+  const gr=(h,x,y,z)=>{ const g=G[h%12]; return g[0]*x+g[1]*y+g[2]*z; };
+  return (x,y,z)=>{
+    const X=Math.floor(x)&255, Y=Math.floor(y)&255, Z=Math.floor(z)&255;
+    x-=Math.floor(x); y-=Math.floor(y); z-=Math.floor(z);
+    const u=fd(x), v=fd(y), w=fd(z);
+    const A=perm[X]+Y, AA=perm[A]+Z, AB=perm[A+1]+Z;
+    const B=perm[X+1]+Y, BA=perm[B]+Z, BB=perm[B+1]+Z;
+    return lp(lp(lp(gr(perm[AA],x,y,z),     gr(perm[BA],x-1,y,z),     u),
+                 lp(gr(perm[AB],x,y-1,z),   gr(perm[BB],x-1,y-1,z),   u), v),
+              lp(lp(gr(perm[AA+1],x,y,z-1), gr(perm[BA+1],x-1,y,z-1), u),
+                 lp(gr(perm[AB+1],x,y-1,z-1),gr(perm[BB+1],x-1,y-1,z-1),u), v), w)*1.4;
+  };
+})();
+
+const mkCv=()=>document.createElement('canvas');
+const wsrcCv=mkCv(), wdstCv=mkCv(), blurCv=mkCv();
+const wctx=wsrcCv.getContext('2d'), dctx=wdstCv.getContext('2d'), bctx=blurCv.getContext('2d');
 let bw=0, bh=0, bpad=0, bmask=null;
+
+// 効きのカーブ。線形だと効き始めが帯に見え、t^2 だと中間がほぼ素通しになる
+const PERIPH_STOPS=[[0,0],[0.25,0.22],[0.5,0.58],[0.75,0.88],[1,1]];
+function periphCurve(f){                       // グラデーションと同じ形を数値でも引けるように
+  if(f<=0) return 0;
+  for(let i=1;i<PERIPH_STOPS.length;i++){
+    const a=PERIPH_STOPS[i-1], b=PERIPH_STOPS[i];
+    if(f<=b[0]) return a[1]+(b[1]-a[1])*(f-a[0])/(b[0]-a[0]);
+  }
+  return 1;
+}
 
 function buildPeriph(){
   if(!PERIPH || !W || !H) return;
   bw=Math.max(1,Math.round(W*DS)); bh=Math.max(1,Math.round(H*DS));
-  // ぼかしはキャンバスの外を透明として拾うので、縁が欠けないぶんの余白を取る
-  bpad=CAN_FILTER ? Math.ceil(PERIPH_MAX*DS*3) : 2;
-  blurCv.width=bw+bpad*2; blurCv.height=bh+bpad*2;
+  // ぼかしとうねりはキャンバス外を透明として拾うので、縁が欠けないぶんの余白を取る
+  bpad=CAN_FILTER ? Math.ceil(PERIPH_MAX*DS*2 + WARP_MAX*DS + 2) : 2;
+  const pw=bw+bpad*2, ph=bh+bpad*2;
+  [wsrcCv,wdstCv,blurCv].forEach(c=>{ c.width=pw; c.height=ph; });
   const cx=bpad+bw/2, cy=bpad+bh/2, half=Math.hypot(bw,bh)/2;
   const g=bctx.createRadialGradient(cx,cy,half*PERIPH_R0, cx,cy,half);
-  // smoothstep 相当のカーブ。線形だと効き始めが帯に見え、t^2 だと中間がほぼ効かない
-  [[0,0],[0.25,0.08],[0.5,0.32],[0.75,0.68],[1,1]].forEach(s=>
-    g.addColorStop(s[0],'rgba(0,0,0,'+s[1]+')'));
+  PERIPH_STOPS.forEach(s=> g.addColorStop(s[0],'rgba(0,0,0,'+s[1]+')'));
   bmask=g;
 }
 
-function present(){
+// 粗い格子ごとに平行移動して「うねり」を作る。振幅は中心ほど 0（中心は動かさない）
+function warpStage(t){
+  const pw=wdstCv.width, ph=wdstCv.height;
+  const z=t*WARP_SPEED, amp=WARP_MAX*DS;
+  const cx=bpad+bw/2, cy=bpad+bh/2, half=Math.hypot(bw,bh)/2;
+  const ns=WARP_SCALE/Math.min(pw,ph);         // 縦横で歪みの目が変わらないよう等方に
+  const m=Math.ceil(amp)+1;                    // ずらしても隙間が空かないよう各セルを広げて描く
+  dctx.setTransform(1,0,0,1,0,0);
+  dctx.clearRect(0,0,pw,ph);
+  for(let y=0;y<ph;y+=WARP_CELL) for(let x=0;x<pw;x+=WARP_CELL){
+    const mx=x+WARP_CELL/2, my=y+WARP_CELL/2;
+    const f=(Math.hypot(mx-cx,my-cy)/half - PERIPH_R0)/(1-PERIPH_R0);
+    // ぼけより一段早く効かせる（sqrt）。ぼける前から周辺が泳いでいる方が生々しい
+    const k=Math.sqrt(periphCurve(Math.min(1,f)));
+    if(k<0.02) continue;                       // 中心付近は動かさないので描き直しも要らない
+    const dx=NOISE(mx*ns, my*ns, z)*amp*k;
+    const dy=NOISE(mx*ns+91.7, my*ns-31.4, z+55.3)*amp*k;
+    const sx=x-m, sy=y-m, cw=WARP_CELL+m*2;
+    dctx.drawImage(wsrcCv, sx,sy,cw,cw, sx+dx,sy+dy,cw,cw);
+  }
+}
+
+function present(t){
   if(!W || !H) return;                                  // レイアウト前は描くものが無い
   view.drawImage(off, 0,0, W,H);                        // まず鮮明な絵をそのまま
   if(PERIPH && bmask){
-    const wd=blurCv.width, ht=blurCv.height;
+    const pw=blurCv.width, ph=blurCv.height;
+    // 1) 縮小。ぼかしが縁で欠けないよう、引き伸ばし下地 → 正位置 の2回描きで余白を埋める
+    wctx.setTransform(1,0,0,1,0,0);
+    wctx.drawImage(off, 0,0, pw,ph);                    // 下地は外周リングにしか出ない
+    wctx.drawImage(off, bpad,bpad, bw,bh);
+    // 2) うねり（中心は素通しなので wsrc をそのまま使う領域が残る）
+    let src=wsrcCv;
+    if(WARP && CAN_FILTER){ warpStage(t); src=wdstCv; }
+    // 3) ぼかし。ここで格子の継ぎ目も一緒に消える
     bctx.setTransform(1,0,0,1,0,0);
     bctx.globalCompositeOperation='source-over';
-    bctx.clearRect(0,0,wd,ht);
+    bctx.clearRect(0,0,pw,ph);
     if(CAN_FILTER) bctx.filter='blur('+(PERIPH_MAX*DS)+'px)';
-    bctx.drawImage(off, 0,0, wd,ht);                    // 余白を埋める下地（引き伸ばし）
-    bctx.drawImage(off, bpad,bpad, bw,bh);              // 正位置。縁だけ下地が透ける
+    bctx.drawImage(src, 0,0);
     bctx.filter='none';
-    bctx.globalCompositeOperation='destination-in';     // グラデーションで抜く
-    bctx.fillStyle=bmask; bctx.fillRect(0,0,wd,ht);
+    // 4) グラデーションで抜いて、鮮明な絵の上に重ねる
+    bctx.globalCompositeOperation='destination-in';
+    bctx.fillStyle=bmask; bctx.fillRect(0,0,pw,ph);
     bctx.globalCompositeOperation='source-over';
     view.drawImage(blurCv, bpad,bpad, bw,bh, 0,0, W,H);
   }
@@ -509,7 +588,7 @@ function frame(ms){
   }
 
   drawFly(t);
-  present();     // オフスクリーン → 画面（周辺だけぼかす）。紙目はこの中で最後に乗る
+  present(t);    // オフスクリーン → 画面（周辺だけぼかす）。紙目はこの中で最後に乗る
 
   requestAnimationFrame(frame);
 }

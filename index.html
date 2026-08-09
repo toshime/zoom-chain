@@ -110,6 +110,13 @@ const PERIPH     = true; // 切るとオフスクリーンをそのまま出す�
 const PERIPH_MAX = 24;   // 最も強いところのぼけ半径（画面px）
 const PERIPH_R0  = 0.18; // ここまでは素通し（画面中心〜対角半径に対する比）
 
+// 中央の当たり枠（画面座標に固定するUI。ズームしても大きさは変わらない）
+const FRAME_ON   = true;
+const FRAME_N    = 4;    // スプライトシートのコマ数（横並び）
+const FRAME_FPS  = 8;    // コマ送りの速さ
+const FRAME_SIZE = 0.62; // 一辺の長さ（画面短辺に対する比）
+const FRAME_INK  = 0.8;  // 濃さ
+
 const swapLo = SWAP_HI - FADE_W;
 const fit   = () => Math.min(W,H)/1150;
 const scale = () => Math.pow(2, zoom) * fit();
@@ -572,7 +579,27 @@ function buildPeriph(){
   bmask=g;
 }
 
-function present(){
+// ── 中央の当たり枠 ─────────────────────────────────────────
+//  手描き枠の4コマを 8fps でループさせるだけ。線がぷるぷるして紙の上に留まる。
+//  ワールドではなく画面座標に固定するので、寄っても引いても枠の大きさは変わらない。
+//  「この枠にいい感じに収まったら」の基準にする当たり枠。
+const frameImg=new Image();
+let fsw=0, fsh=0;                                       // 1コマぶんのサイズ
+frameImg.onload=()=>{ fsw=frameImg.naturalWidth/FRAME_N; fsh=frameImg.naturalHeight; };
+frameImg.src='frame_sheet.png';
+
+function drawFrame(t){
+  if(!FRAME_ON || !started || !fsw) return;             // タイトル中は出さない
+  const w=Math.min(W,H)*FRAME_SIZE, h=w*fsh/fsw;
+  const i=Math.floor(t*FRAME_FPS)%FRAME_N;
+  view.save();
+  view.globalCompositeOperation='multiply';             // 紙に刷った見た目に寄せる
+  view.globalAlpha=FRAME_INK;
+  view.drawImage(frameImg, i*fsw,0, fsw,fsh, (W-w)/2, (H-h)/2, w, h);
+  view.restore();
+}
+
+function present(t){
   if(!W || !H) return;                                  // レイアウト前は描くものが無い
   view.drawImage(off, 0,0, W,H);                        // まず鮮明な絵をそのまま
   if(PERIPH && bmask){
@@ -594,6 +621,7 @@ function present(){
     bctx.globalCompositeOperation='source-over';
     view.drawImage(blurCv, bpad,bpad, bw,bh, 0,0, W,H);
   }
+  drawFrame(t);                                         // 枠はぼかしの外。中央なので常に鮮明
   // 紙目はぼかしの外側＝全面に等倍で乗せる。紙そのものはボケない
   // （2枚の絵が「同じ1枚の紙の上の出来事」に見える条件なので、ここは崩さない）
   view.save();
@@ -631,7 +659,7 @@ function frame(ms){
   }
 
   drawFly(t);
-  present();     // オフスクリーン → 画面（周辺だけぼかす）。紙目はこの中で最後に乗る
+  present(t);    // オフスクリーン → 画面（周辺だけぼかす）。枠と紙目はこの中で最後に乗る
 
   requestAnimationFrame(frame);
 }

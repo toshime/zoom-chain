@@ -159,6 +159,69 @@ cv.addEventListener('wheel', e=>{
   cv.addEventListener(t, e=>e.preventDefault(), {passive:false}));
 document.addEventListener('dblclick', e=>e.preventDefault());
 
+// ── ダイヤル音 ─────────────────────────────────────────────
+//  log2 の zoom 軸を等間隔の「刻み」に切って、またぐたびに1回鳴らす。
+//  log2 なので刻みはどの倍率でも体感的に等間隔になる（3章の理由がそのまま効く）。
+//  速く動かすほど1フレームで大量の刻みをまたぐので、勝手に「ギュリリリリ」になる。
+//  ホイールの指数減衰で止まるときは刻みの間隔が開くので、減速もそのまま音になる。
+const CLICK_STEP  = 0.16;   // 刻み幅（log2）。小さいほど密に鳴る
+const CLICK_GAP   = 0.018;  // 連射の下限間隔（秒）。これより速くは詰めない
+const CLICK_AHEAD = 0.14;   // 先読みの上限（秒）。これ以上は溜めずに間引く
+const CLICK_REF   = 2.0;    // このズームで原音のピッチになる
+const CLICK_OCT   = 0.34;   // zoom 1 あたり何オクターブ上がるか
+const CLICK_VOL   = 0.42;
+
+let AC=null, clickBuf=null, clickOut=null, lastNotch=null, nextAt=0, clickSeed=0, prevZoomA=null;
+
+function initAudio(){
+  if(AC) return;
+  const C=window.AudioContext||window.webkitAudioContext; if(!C) return;
+  AC=new C();
+  clickOut=AC.createGain(); clickOut.gain.value=CLICK_VOL; clickOut.connect(AC.destination);
+  fetch('dial.mp3').then(r=>r.arrayBuffer())
+    // Safari は Promise を返さない旧シグネチャなのでコールバック版で受ける
+    .then(b=>new Promise((ok,ng)=>AC.decodeAudioData(b,ok,ng)))
+    .then(b=>{ clickBuf=b; })
+    .catch(()=>{ clickBuf=null; });        // 鳴らなくても遊べる。握り潰す
+}
+// 音は必ずユーザー操作から起こす（モバイルは自動再生できない）
+function unlockAudio(){ initAudio(); if(AC && AC.state!=='running') AC.resume(); }
+['pointerdown','wheel','keydown'].forEach(t=>
+  window.addEventListener(t, unlockAudio, {passive:true}));
+
+function playClick(at, z, dir, speed){
+  const s=AC.createBufferSource(); s.buffer=clickBuf;
+  const w=n(clickSeed++);                  // 種から決まる揺らぎ。毎回同じ音だと機械的に聞こえる
+  s.playbackRate.value=Math.max(0.45, Math.min(3.2,
+    Math.pow(2, (z-CLICK_REF)*CLICK_OCT + dir*0.05 + w*0.03)));
+  const g=AC.createGain();
+  g.gain.value=(0.55+Math.min(1,speed/40)*0.45)*(1+w*0.12);  // 速いほど少し強く
+  s.connect(g); g.connect(clickOut); s.start(at);
+}
+
+function clickAudio(dt){
+  if(!AC || AC.state!=='running' || !clickBuf){ lastNotch=null; prevZoomA=null; return; }
+  const speed=prevZoomA===null ? 0 : Math.abs(zoom-prevZoomA)/Math.max(dt,1e-3);  // zoom単位/秒
+  prevZoomA=zoom;
+  const notch=Math.floor(zoom/CLICK_STEP);
+  if(lastNotch===null){ lastNotch=notch; return; }            // 鳴り始めは基準を取るだけ
+  if(notch===lastNotch) return;
+  const from=lastNotch, dir=notch>from?1:-1, count=Math.abs(notch-from);
+  lastNotch=notch;
+  const now=AC.currentTime;
+  if(nextAt<now) nextAt=now;
+  // 溜めすぎると指から音が遅れるので、鳴らせる数だけに間引く。
+  // 打ち切りではなく間引きなのは、最後の刻みまで鳴らしてピッチを現在倍率に着地させたいから
+  const room=Math.max(1, Math.floor((now+CLICK_AHEAD-nextAt)/CLICK_GAP)+1);
+  const play=Math.min(count, room);
+  for(let i=0;i<play;i++){
+    // 刻みごとの倍率でピッチを決めるので、速い一振りが上昇/下降のグリッサンドになる
+    const k=Math.round((i+1)*count/play);
+    playClick(nextAt, (from+k*dir)*CLICK_STEP, dir, speed);
+    nextAt+=CLICK_GAP;
+  }
+}
+
 // ── 手描き線のヘルパ ───────────────────────────────────────
 const INK='#1a1a1a';
 // 種から決まる固定ノイズ。毎フレーム乱数を振ると線が沸くので必ず固定する
@@ -578,7 +641,7 @@ let last=0;
 
 function frame(ms){
   const t=ms/1000, dt=Math.min(0.05, last?t-last:0.016); last=t;
-  easeZoom(dt); updateStage(); flyUpdate(dt);
+  easeZoom(dt); clickAudio(dt); updateStage(); flyUpdate(dt);
   PX = 1/scale();
 
   paint(node, activeAnchor, 1);                   // A は不透明

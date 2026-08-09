@@ -131,6 +131,9 @@
 
 const SCENE_DIR = 'scenes';
 const IMG_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
+// macOS のファイル名は濁点分解（NFD）で来ることがある。GitHub Pages 上の実体は NFC なので
+// flow.json に書く名前は必ず NFC に揃える（ここが揃わないと本番だけ 404 になる）
+const nfc = s => (s && s.normalize) ? s.normalize('NFC') : s;
 const FRAME_RATIO = 0.62;          // 本体の FRAME_SIZE と同じ：判定枠が画面短辺に占める比
 
 const $ = id => document.getElementById(id);
@@ -180,11 +183,12 @@ function applyFlow(flow){
   const byFile = new Map(state.scenes.map(s=>[s.file, s]));
   const ordered = [];
   for (const fs of flow.scenes){
-    const s = byFile.get(fs.file);
+    const key = nfc(fs.file);              // 旧 flow.json に NFD が残っていても拾えるように
+    const s = byFile.get(key);
     if (!s) continue;
     if (fs.zoom) s.zoom = { ...fs.zoom };
     if (fs.land) s.land = { ...fs.land };
-    ordered.push(s); byFile.delete(fs.file);
+    ordered.push(s); byFile.delete(key);
   }
   const rest = [...byFile.values()].sort((a,b)=>a.file.localeCompare(b.file, undefined, {numeric:true}));
   state.scenes = [...ordered, ...rest];
@@ -237,7 +241,7 @@ async function listViaHttp(){
   return [...doc.querySelectorAll('a')]
     .map(a=>decodeURIComponent(a.getAttribute('href')||''))
     .filter(n=>IMG_RE.test(n))
-    .map(n=>({ file:n, url:SCENE_DIR + '/' + encodeURIComponent(n) }));
+    .map(n=>({ file:nfc(n), url:SCENE_DIR + '/' + encodeURIComponent(n) }));
 }
 
 async function listViaHandle(){
@@ -245,7 +249,7 @@ async function listViaHandle(){
   for await (const [name, h] of state.dirHandle.entries()){
     if (h.kind === 'file' && IMG_RE.test(name)){
       const f = await h.getFile();
-      out.push({ file:name, url:URL.createObjectURL(f) });
+      out.push({ file:nfc(name), url:URL.createObjectURL(f) });
     }
   }
   return out;
@@ -309,11 +313,11 @@ async function addFiles(files){
     .sort((a,b)=>a.name.localeCompare(b.name, undefined, {numeric:true}));
   let added = 0;
   for (const f of imgs){
-    if (state.scenes.some(s=>s.file===f.name)) continue;
+    if (state.scenes.some(s=>s.file===nfc(f.name))) continue;
     const url = URL.createObjectURL(f);
     try{
       const img = await loadImage(url);
-      state.scenes.push({ file:f.name, img, url, w:img.naturalWidth, h:img.naturalHeight, zoom:null, land:null });
+      state.scenes.push({ file:nfc(f.name), img, url, w:img.naturalWidth, h:img.naturalHeight, zoom:null, land:null });
       added++;
       if (state.dirHandle){          // フォルダにも実体を置いておく（本番が読むのは scenes/）
         try{

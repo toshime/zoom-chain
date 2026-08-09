@@ -197,16 +197,23 @@ const CLICK_VOL   = 0.42;
 let AC=null, clickBuf=null, clickOut=null, lastNotch=null, nextAt=0, clickSeed=0, prevZoomA=null;
 
 // ── BGM と切り替わり音 ─────────────────────────────────────
-//  BGMは2曲を同時にループで走らせておき、シーンが替わるたびにゲインだけ入れ替える。
-//  曲を頭出しし直さないので、フェードが「ぬるっ」と繋がる。
+//  BGMはシーンごとに1曲（null は無音）。シーンが替わると前の曲と
+//  クロスフェードで「ぬるっ」と入れ替わる。
 //  正解（ハエの居る特徴＝ワールド原点）へ寄るほど BGM を絞る。
 const BGM_VOL   = 0.5;    // 通常音量
 const BGM_DUCK  = 0.15;   // 寄り切ったときに残る音量（BGM_VOL に対する倍率）
 const BGM_XFADE = 1.8;    // 入れ替えフェードの長さ（秒）
 const SWAP_VOL  = 0.9;    // 切り替わり音の音量
 
-let bgmBufs=[null,null], swapBuf=null;
-let bgmBus=null, bgmTrkGain=null, bgmCur=0, bgmOn=false, bgmVolNow=BGM_VOL;
+// シーン番号（0始まり）→ 曲。1:タイトル と 10:コーヒー は無音、11:宇宙 は夢オチ曲
+const SCENE_BGM = [null,'bgm01','bgm02','bgm03','bgm04','bgm05','bgm06','bgm07','bgm08',null,'bgm_room'];
+// 切り替わり音は「入る先のシーン」で選ぶ。11:宇宙 は専用、6〜9（ループ帯）は専用
+const swapSfxFor = idx => idx===10 ? 'swap_space' : (idx>=5 && idx<=8) ? 'swap_loop' : 'swap';
+
+const SFX_FILES=['swap','swap_loop','swap_space',
+                 'bgm01','bgm02','bgm03','bgm04','bgm05','bgm06','bgm07','bgm08','bgm_room'];
+let audioBufs={};                          // 名前 → AudioBuffer（読み込み済みのものだけ入る）
+let bgmBus=null, bgmPlaying=null, bgmVolNow=BGM_VOL;   // bgmPlaying: {name, src, gain}
 
 function loadBuf(url, set){
   fetch(url).then(r=>r.arrayBuffer())
@@ -222,48 +229,46 @@ function initAudio(){
   AC=new C();
   clickOut=AC.createGain(); clickOut.gain.value=CLICK_VOL; clickOut.connect(AC.destination);
   bgmBus=AC.createGain(); bgmBus.gain.value=BGM_VOL; bgmBus.connect(AC.destination);
-  loadBuf('dial.mp3',  b=>{ clickBuf=b; });
-  loadBuf('bgm01.mp3', b=>{ bgmBufs[0]=b; });
-  loadBuf('bgm02.mp3', b=>{ bgmBufs[1]=b; });
-  loadBuf('swap.mp3',  b=>{ swapBuf=b; });
+  loadBuf('dial.mp3', b=>{ clickBuf=b; });
+  SFX_FILES.forEach(f=> loadBuf(f+'.mp3', b=>{ audioBufs[f]=b; }));
 }
 
-// ゲーム開始後、バッファが揃いしだい2曲同時に流し始める（鳴るのは片方だけ）
-function startBgm(){
-  if(bgmOn || !AC || AC.state!=='running' || !bgmBufs[0] || !bgmBufs[1]) return;
-  bgmTrkGain=bgmBufs.map((b,i)=>{
-    const s=AC.createBufferSource(); s.buffer=b; s.loop=true;
-    const g=AC.createGain(); g.gain.value = i===bgmCur ? 1 : 0;
-    s.connect(g); g.connect(bgmBus); s.start();
-    return g;
-  });
-  bgmOn=true;
-}
-
-// シーン切り替わりの瞬間：SFX を1発 ＋ BGM を反対の曲へクロスフェード
-function sceneSwapAudio(){
-  if(!AC || AC.state!=='running'){ bgmCur=1-bgmCur; return; }
-  if(swapBuf){
-    const s=AC.createBufferSource(); s.buffer=swapBuf;
-    const g=AC.createGain(); g.gain.value=SWAP_VOL;
-    s.connect(g); g.connect(AC.destination); s.start();
-  }
-  const nxt=1-bgmCur;
-  if(bgmOn){
-    const now=AC.currentTime;
-    [[bgmCur,0],[nxt,1]].forEach(([i,v])=>{
-      const g=bgmTrkGain[i].gain;
-      g.cancelScheduledValues(now);
-      g.setValueAtTime(g.value, now);
-      g.linearRampToValueAtTime(v, now+BGM_XFADE);
-    });
-  }
-  bgmCur=nxt;
+// シーン切り替わりの瞬間：入る先のシーンに応じた SFX を1発鳴らす。
+// BGM の入れ替えは bgmUpdate が node を見て勝手にやる
+function sceneSwapAudio(idx){
+  if(!AC || AC.state!=='running') return;
+  const b=audioBufs[swapSfxFor(idx)];
+  if(!b) return;
+  const s=AC.createBufferSource(); s.buffer=b;
+  const g=AC.createGain(); g.gain.value=SWAP_VOL;
+  s.connect(g); g.connect(AC.destination); s.start();
 }
 
 function bgmUpdate(dt){
-  if(started) startBgm();               // バッファ到着待ちがあるので毎フレーム試す（済んでいれば即return）
-  if(!bgmOn) return;
+  if(!AC || AC.state!=='running' || !started) return;
+  // いま流れているべき曲（シーンから決まる）と実際が違えばクロスフェードで入れ替える。
+  // バッファ未着ならその曲が来るまで待つ（前の曲は流れ続ける）
+  const want=(SCENES && SCENE_BGM[node]) || null;
+  const cur=bgmPlaying ? bgmPlaying.name : null;
+  if(want!==cur && (want===null || audioBufs[want])){
+    const now=AC.currentTime;
+    if(bgmPlaying){
+      const g=bgmPlaying.gain.gain;
+      g.cancelScheduledValues(now);
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(0, now+BGM_XFADE);
+      bgmPlaying.src.stop(now+BGM_XFADE+0.1);
+      bgmPlaying=null;
+    }
+    if(want){
+      const s=AC.createBufferSource(); s.buffer=audioBufs[want]; s.loop=true;
+      const g=AC.createGain();
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(1, now+BGM_XFADE);
+      s.connect(g); g.connect(bgmBus); s.start(now);
+      bgmPlaying={name:want, src:s, gain:g};
+    }
+  }
   // 「正解に近い」＝ 深く寄っていて、かつ狙いの特徴が画面中央付近にあること
   const d=Math.hypot(camX,camY)*scale();                    // 原点の画面中心からのズレ（画面px）
   const near=1-Math.min(1, d/(Math.min(W,H)*0.6));
@@ -384,7 +389,8 @@ fetch('scenes/flow.json', {cache:'no-store'})
     img.onload =()=>ok({ img, w:img.naturalWidth, h:img.naturalHeight,
                          land:fs.land||null, zoom:fs.zoom||null });
     img.onerror=()=>ng(new Error(fs.file));
-    img.src='scenes/'+encodeURIComponent(fs.file);
+    // flow.json 側が NFD（macOS の濁点分解）でも Pages の実体（NFC）に当たるよう揃える
+    img.src='scenes/'+encodeURIComponent(fs.file.normalize ? fs.file.normalize('NFC') : fs.file);
   }))))
   .then(list=>{ if(!list.length) throw new Error('empty'); SCENES=list; initScene(); })
   .catch(()=>{     // file:// 直開きや flow 未作成。遊べないことだけタイトルに出す

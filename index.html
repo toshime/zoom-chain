@@ -165,7 +165,7 @@ document.addEventListener('dblclick', e=>e.preventDefault());
 const CLICK_STEP  = 0.16;   // 刻み幅（log2）。小さいほど密に鳴る
 const CLICK_GAP   = 0.018;  // 連射の下限間隔（秒）。これより速くは詰めない
 const CLICK_AHEAD = 0.14;   // 先読みの上限（秒）。これ以上は溜めずに間引く
-const CLICK_REF   = 2.0;    // このズームで原音のピッチになる
+const CLICK_REF   = -0.5;   // このズームで原音のピッチになる。下げると全体が高くなる
 const CLICK_OCT   = 0.34;   // zoom 1 あたり何オクターブ上がるか
 const CLICK_VOL   = 0.42;
 
@@ -190,7 +190,7 @@ function unlockAudio(){ initAudio(); if(AC && AC.state!=='running') AC.resume();
 function playClick(at, z, dir, speed){
   const s=AC.createBufferSource(); s.buffer=clickBuf;
   const w=n(clickSeed++);                  // 種から決まる揺らぎ。毎回同じ音だと機械的に聞こえる
-  s.playbackRate.value=Math.max(0.45, Math.min(3.2,
+  s.playbackRate.value=Math.max(0.5, Math.min(4.8,
     Math.pow(2, (z-CLICK_REF)*CLICK_OCT + dir*0.05 + w*0.03)));
   const g=AC.createGain();
   g.gain.value=(0.55+Math.min(1,speed/40)*0.45)*(1+w*0.12);  // 速いほど少し強く

@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>zoom</title>
+<title>木を見て森を見ず</title>
 <meta name="theme-color" content="#ffffff">
 <meta name="color-scheme" content="light">
 <meta property="og:type" content="website">
-<meta property="og:title" content="zoom">
+<meta property="og:title" content="木を見て森を見ず">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23ffffff'/%3E%3Ccircle cx='16' cy='16' r='11' fill='none' stroke='%231a1a1a' stroke-width='2'/%3E%3Cellipse cx='16' cy='16' rx='6' ry='2' fill='%231a1a1a'/%3E%3C/svg%3E">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -39,12 +39,22 @@
   .go, .note {
     font:12px/1 ui-monospace, "SF Mono", Menlo, monospace; letter-spacing:.2em; white-space:nowrap;
   }
-  .go { font-size:14px; }
-  .go { animation:breathe 2.6s ease-in-out infinite; }
+  .go { font-size:14px; opacity:.85; }
+  .start.ready .go { animation:breathe 2.6s ease-in-out infinite; }
   .note { margin-top:15px; font-size:11px; letter-spacing:.16em; opacity:.42; }
   @keyframes breathe { 0%,100%{opacity:.85} 50%{opacity:.38} }
+  /* 読み込みの帯。準備できたら消えて「クリックしてスタート」だけが残る */
+  .bar {
+    width:min(210px, 46vw); height:2px; margin-top:22px;
+    background:rgba(26,26,26,.13); overflow:hidden; transition:opacity .4s ease;
+  }
+  .bar > i {
+    display:block; height:100%; background:#1a1a1a;
+    transform:scaleX(0); transform-origin:0 50%; transition:transform .2s linear;
+  }
+  .start.ready .bar, .start.dead .bar { opacity:0; }
   @media (prefers-reduced-motion: reduce) {
-    .go { animation:none; opacity:.85; }
+    .start.ready .go { animation:none; opacity:.85; }
   }
 </style>
 </head>
@@ -52,9 +62,10 @@
 
 <canvas id="cv"></canvas>
 <div class="hint" id="hint">ハエに寄る</div>
-<div class="start" id="start" role="button" tabindex="0" aria-label="クリックしてスタート">
-  <div class="go">クリックしてスタート</div>
+<div class="start" id="start" role="button" tabindex="0" aria-label="読み込み中" aria-disabled="true">
+  <div class="go" id="go">よみこみ中</div>
   <div class="note">音が出ます</div>
+  <div class="bar" id="bar"><i id="barIn"></i></div>
 </div>
 
 <script>
@@ -69,16 +80,43 @@
 //  ・切り替わりが確定したら、引いたタイミングでハエが飛び、着地で固定
 // ═══════════════════════════════════════════════════════════
 
-const cv = document.getElementById('cv');
-const view = cv.getContext('2d');            // 画面に出す最終合成先
+const el=id=>document.getElementById(id);
+const cv = el('cv');
+// どちらも毎フレーム全面を塗り潰すので alpha は要らない。
+// 透明度を持たないぶん合成が軽く、背後との blend も省ける
+const view = cv.getContext('2d', {alpha:false});      // 画面に出す最終合成先
 // 絵はすべてオフスクリーンに描く。周辺視野のぼかしで同じ絵を2回使うため
 const off = document.createElement('canvas');
-const ctx = off.getContext('2d');
+const ctx = off.getContext('2d', {alpha:false});
 let W=0, H=0, DPR=1;
 
+// ── 自動画質 ───────────────────────────────────────────────
+//  カクつく原因はほぼ「1フレームで塗る画素数」。毎フレーム
+//    絵（最大2枚）→ 画面へ転送 → 周辺ぼかし → 枠 → 紙目
+//  と画面数枚ぶんを塗るので、4Kを DPR2 で受けると3千万画素/フレームになり、
+//  内蔵GPUのPCでは間に合わない。
+//  そこで実測した1フレームの長さを見て、間に合っていない機械でだけ段を下げる。
+//  速い機械は 0段目のまま＝今までの見た目を一切変えない。
+const QUALITY=[
+  {dpr:2,    px:Infinity, blur:true,  ds:0.5 },   // 0: そのまま
+  {dpr:1.5,  px:8.0e6,    blur:true,  ds:0.5 },
+  {dpr:1.25, px:4.0e6,    blur:true,  ds:0.35},
+  {dpr:1,    px:2.2e6,    blur:false, ds:0.35},   // 3: 一番重い周辺ぼかしを落とす
+  {dpr:0.75, px:1.3e6,    blur:false, ds:0.35},   // 4: 最後の手段。解像度そのものを落とす
+];
+//  px は「1フレームに塗ってよい画素数」の目安。高DPIの機械では 1〜2段目で効き、
+//  1080p/DPR1 のような機械では 3段目のぼかし停止が効く（塗る枚数そのものが減る）。
+let qi=0, periphOn=true, DS=0.5;
+
 function resize(){
-  DPR = Math.min(window.devicePixelRatio||1, 2.5);
+  const q=QUALITY[qi];
   W = cv.clientWidth; H = cv.clientHeight;
+  // 3倍端末で 2.5 まで上げても紙と鉛筆の絵では差が見えないので 2 で頭打ち。
+  // 段を下げたときは「画面の広さ」でも頭を抑える（広い画面ほど先に効く）
+  DPR = Math.min(window.devicePixelRatio||1, q.dpr, Math.sqrt(q.px/Math.max(1,W*H)));
+  periphOn = PERIPH && q.blur;
+  // ctx.filter が無い環境は縮小拡大のボケだけで代用する
+  DS = CAN_FILTER ? q.ds : 0.07;
   cv.width = Math.round(W*DPR); cv.height = Math.round(H*DPR);
   off.width = cv.width; off.height = cv.height;
   view.setTransform(DPR,0,0,DPR,0,0);
@@ -95,8 +133,16 @@ if(window.ResizeObserver) new ResizeObserver(resize).observe(cv);
 const MIN_ZOOM=-3.2, MAX_ZOOM=8.5;
 const SWAP_HI  = 3.4;    // ここまで寄ると入れ替わり確定。下げるほど浅い寄りで入れ替わる（ゆるい）
 const FADE_W   = 0.8;    // クロスフェードにかける zoom 幅
-const MOVE_OUT = 0.75;   // ここまで引くとハエが次の場所へ飛ぶ
-const MOVE_WAIT= 0.7;    // 引いてから飛び立つまでの間
+const MOVE_OUT = 2.4;    // ここまで引くとハエが次の場所へ飛ぶ。入れ替わりは 3.4 なので「一段引けば飛ぶ」
+const MOVE_WAIT= 0.35;   // 引いてから飛び立つまでの間
+
+// 狙い判定：ハエの止まり場所（＝ワールド原点）が画面中央からどれだけズレてよいか。
+// 画面短辺に対する比。倍率だけを見ていると、寄りさえすれば画面のどこを見ていても
+// 次へ進んでしまう（前の着地点を寄っても進む）ので、中央に収まっていることを条件にする。
+// ズレは画面px で測るので、深く寄るほど自動的に厳しくなる
+const AIM_IN   = 0.18;   // ここまで中央なら「狙えている」
+const AIM_OUT  = 0.40;   // ここまで外すと狙いが外れる（間はヒステリシス）
+const AIM_BACK = 0.18;   // 外したときクロスフェードが戻る速さ（秒）
 
 // 周辺視野ぼかし
 const PERIPH     = true; // 切るとオフスクリーンをそのまま出すだけになる
@@ -212,15 +258,23 @@ const swapSfxFor = idx => idx===10 ? 'swap_space' : (idx>=5 && idx<=8) ? 'swap_l
 
 const SFX_FILES=['swap','swap_loop','swap_space',
                  'bgm01','bgm02','bgm03','bgm04','bgm05','bgm06','bgm07','bgm08','bgm_room'];
-let audioBufs={};                          // 名前 → AudioBuffer（読み込み済みのものだけ入る）
+const AUDIO_FILES=['dial'].concat(SFX_FILES);
+let audioRaw={};                           // 名前 → ArrayBuffer（取得済み・未デコード）
+let audioBufs={};                          // 名前 → AudioBuffer（デコード済みのものだけ入る）
 let bgmBus=null, bgmPlaying=null, bgmVolNow=BGM_VOL;   // bgmPlaying: {name, src, gain}
 
-function loadBuf(url, set){
-  fetch(url).then(r=>r.arrayBuffer())
-    // Safari は Promise を返さない旧シグネチャなのでコールバック版で受ける
-    .then(b=>new Promise((ok,ng)=>AC.decodeAudioData(b,ok,ng)))
-    .then(set)
-    .catch(()=>{});                        // 鳴らなくても遊べる。握り潰す
+// mp3 の取得はローディング中に済ませてある。ここでやるのはデコードだけ。
+// AudioContext さえ在れば suspended のままデコードできるので、
+// タイトルを出した時点で全曲を鳴らせる状態にしておける（1曲目の頭が欠けない）
+function decodeAudio(){
+  if(!AC) return;
+  Object.keys(audioRaw).forEach(name=>{
+    const ab=audioRaw[name]; delete audioRaw[name];
+    const set=b=>{ if(name==='dial') clickBuf=b; else audioBufs[name]=b; };
+    // Safari は Promise を返さない旧シグネチャなのでコールバック版で受ける。
+    // decodeAudioData は渡した ArrayBuffer を空にするので複製を渡す
+    try{ AC.decodeAudioData(ab.slice(0), set, ()=>{}); }catch(e){}   // 鳴らなくても遊べる
+  });
 }
 
 function initAudio(){
@@ -229,8 +283,7 @@ function initAudio(){
   AC=new C();
   clickOut=AC.createGain(); clickOut.gain.value=CLICK_VOL; clickOut.connect(AC.destination);
   bgmBus=AC.createGain(); bgmBus.gain.value=BGM_VOL; bgmBus.connect(AC.destination);
-  loadBuf('dial.mp3', b=>{ clickBuf=b; });
-  SFX_FILES.forEach(f=> loadBuf(f+'.mp3', b=>{ audioBufs[f]=b; }));
+  decodeAudio();
 }
 
 // シーン切り替わりの瞬間：入る先のシーンに応じた SFX を1発鳴らす。
@@ -375,36 +428,186 @@ function ink(pathFn, wash, ang, spacing, seed, lw, ext){
 //  R0 を旧ハードコード版の特徴半径と同じ値にしてあるので、
 //  SWAP_HI / MOVE_OUT / BGM の寄り判定などの調整値がそのまま効く。
 const R0 = 58;
-let SCENES = null;                 // 読み込み完了で [{img,w,h,land,zoom}] になる
+let SCENES = null;                 // 読み込み完了で [{w,h,land,zoom,blob,full}] になる
 let fitPending = false;            // 画面寸法が取れてから初期倍率を合わせるための保留
 
 const fallbackRegion = s => ({ x:s.w/2, y:s.h/2, r:Math.min(s.w,s.h)*0.18 });
 // name は 'zoom' か 'land'。1枚だけの flow でも落ちないよう中央に保険の領域を置く
 const regionOf = (i,name) => SCENES[i][name] || fallbackRegion(SCENES[i]);
 
+// ── 画像のメモリ管理 ───────────────────────────────────────
+//  元絵は 5712×4284 まである。11枚を素の <img> で抱えると展開後は 700MB を超えて、
+//  モバイルではまず落ちる。ここでは
+//    ・取得した生データ（Blob・合計25MBほど）だけを常に持つ
+//    ・実際に展開するのは「いま描く2枚」（node と node+1）だけ
+//    ・展開時に長辺 4096 で頭打ちにする（多くのGPUのテクスチャ上限。
+//      超えると描画のたびに縮小され直して遅い。寄り切った時点で元絵は
+//      すでに6倍以上に引き伸ばされているので、絵の見えは変わらない）
+//  で 100MB少々に収める。離れたシーンは close() して即返す。
+const MAX_SIDE = 4096;
+
+const freeBitmap = bm => {
+  if(!bm) return;
+  if(bm.close) bm.close();                      // ImageBitmap
+  else if(bm.width!==undefined) bm.width=bm.height=0;   // canvas フォールバック
+};
+
+// 長辺 max に収まる整数サイズ。元の縦横比は必ず保つ
+function fitSide(w,h,max){
+  const k=Math.min(1, max/Math.max(w,h));
+  return [Math.max(1,Math.round(w*k)), Math.max(1,Math.round(h*k))];
+}
+// 半分ずつ落としてから最終サイズへ。一発で 1/7 に縮めると線画がジャギる
+function shrink(src, tw, th){
+  let cur=src, w=src.width||src.naturalWidth, h=src.height||src.naturalHeight, tmp=null;
+  while(w>tw*2 && h>th*2){
+    w=Math.max(tw,w>>1); h=Math.max(th,h>>1);
+    const c=document.createElement('canvas'); c.width=w; c.height=h;
+    const g=c.getContext('2d'); g.imageSmoothingQuality='high'; g.drawImage(cur,0,0,w,h);
+    if(tmp) freeBitmap(tmp);
+    cur=tmp=c;
+  }
+  const out=document.createElement('canvas'); out.width=tw; out.height=th;
+  const g=out.getContext('2d'); g.imageSmoothingQuality='high'; g.drawImage(cur,0,0,tw,th);
+  if(tmp) freeBitmap(tmp);
+  return out;
+}
+function imgFromBlob(blob){
+  return new Promise((ok,ng)=>{
+    const url=URL.createObjectURL(blob), img=new Image();
+    img.onload =()=>{ URL.revokeObjectURL(url); ok(img); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); ng(new Error('decode')); };
+    img.src=url;
+  });
+}
+// Blob → 指定サイズの描画ソース。createImageBitmap の縮小指定が使えれば
+// デコードと縮小が一度に済み、元寸を経由しないぶんピークメモリも小さい
+function decodeTo(blob, tw, th){
+  if(window.createImageBitmap){
+    return createImageBitmap(blob, {resizeWidth:tw, resizeHeight:th, resizeQuality:'high'})
+      .then(bm=>{                                                   // 指定を無視する実装への保険
+        if(Math.abs(bm.width-tw)<2) return bm;
+        const c=shrink(bm,tw,th); freeBitmap(bm); return c;         // 元寸のほうは即返す
+      })
+      .catch(()=> imgFromBlob(blob).then(img=>shrink(img,tw,th)));
+  }
+  return imgFromBlob(blob).then(img=>shrink(img,tw,th));
+}
+
+function ensureFull(i){
+  const s=SCENES&&SCENES[i];
+  if(!s || s.full || s.pend) return s ? (s.pend||Promise.resolve()) : Promise.resolve();
+  const [tw,th]=fitSide(s.w, s.h, MAX_SIDE);
+  s.pend=decodeTo(s.blob, tw, th)
+    .then(bm=>{ s.full=bm; s.pend=null; })
+    .catch(()=>{ s.pend=null; });
+  return s.pend;
+}
+// いま要るのは描いている2枚だけ。それ以外は展開を解いてメモリを返す
+function tendImages(){
+  if(!SCENES) return;
+  for(let i=0;i<SCENES.length;i++){
+    if(i===node || i===node+1) ensureFull(i);
+    else if(!SCENES[i].pend && SCENES[i].full){ freeBitmap(SCENES[i].full); SCENES[i].full=null; }
+  }
+}
+
+// ── 読み込み ───────────────────────────────────────────────
+//  すべてのアセットをタイトルの裏で取り切ってから遊ばせる。
+//  進捗は「重み付きの平均」。1枚8MBの絵と250KBのmp3を等価に数えると
+//  バーが不自然に飛ぶので、だいたいの容量比で重みを付ける。
+let ready=false;
+const slots=[], barIn=el('barIn'), goTx=el('go');   // 進捗は細かく来るので参照は持っておく
+let shownPct=-1;
+function addSlot(w){ slots.push({w:w,p:0}); return slots.length-1; }
+function setSlot(i,p){
+  slots[i].p=p;
+  let a=0,b=0;
+  for(const s of slots){ a+=s.w*s.p; b+=s.w; }
+  const q=b?a/b:0, pct=Math.round(q*100);
+  if(pct===shownPct) return;                     // 1%刻み。チャンクごとに触ると無駄に再描画が走る
+  shownPct=pct;
+  barIn.style.transform='scaleX('+(q).toFixed(3)+')';
+  if(!ready) goTx.textContent='よみこみ中 '+pct+'%';
+}
+
+// Content-Length があれば途中経過も出す。無ければ届いた時点で 1 にする
+function fetchAsset(url, slot){
+  return fetch(url).then(res=>{
+    if(!res.ok) throw new Error(url+' '+res.status);
+    const total=+(res.headers.get('content-length')||0);
+    if(!total || !res.body || !res.body.getReader)
+      return res.blob().then(b=>{ setSlot(slot,1); return b; });
+    const rd=res.body.getReader(), parts=[]; let got=0;
+    const pump=()=>rd.read().then(({done,value})=>{
+      if(done){ setSlot(slot,1); return new Blob(parts); }
+      parts.push(value); got+=value.length;
+      setSlot(slot, Math.min(1, got/total));
+      return pump();
+    });
+    return pump();
+  });
+}
+// flow.json 側が NFD（macOS の濁点分解）でも Pages の実体（NFC）に当たるよう揃える
+const sceneURL = f => 'scenes/'+encodeURIComponent(f.normalize ? f.normalize('NFC') : f);
+
 fetch('scenes/flow.json', {cache:'no-store'})
   .then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); })
-  .then(flow=>Promise.all((flow.scenes||[]).map(fs=>new Promise((ok,ng)=>{
-    const img=new Image();
-    img.onload =()=>ok({ img, w:img.naturalWidth, h:img.naturalHeight,
-                         land:fs.land||null, zoom:fs.zoom||null });
-    img.onerror=()=>ng(new Error(fs.file));
-    // flow.json 側が NFD（macOS の濁点分解）でも Pages の実体（NFC）に当たるよう揃える
-    img.src='scenes/'+encodeURIComponent(fs.file.normalize ? fs.file.normalize('NFC') : fs.file);
-  }))))
-  .then(list=>{ if(!list.length) throw new Error('empty'); SCENES=list; initScene(); })
+  .then(flow=>{
+    const list=flow.scenes||[];
+    if(!list.length) throw new Error('empty');
+    // 枠が増えると進捗が戻って見えるので、数が判るここで全部立てておく
+    const sceneSlots =list.map(()=>addSlot(8));
+    const decodeSlots=[addSlot(3), addSlot(3)];        // 最初の2枚の展開ぶん
+    const spriteSlots=['frame_sheet.png','hae1.png','hae2.png'].map(()=>addSlot(1));
+    const audioSlots =AUDIO_FILES.map(()=>addSlot(1));
+
+    const scenes=Promise.all(list.map((fs,i)=>
+      fetchAsset(sceneURL(fs.file), sceneSlots[i]).then(blob=>({
+        file:fs.file, w:fs.w, h:fs.h, land:fs.land||null, zoom:fs.zoom||null,
+        blob:blob, full:null, pend:null
+      }))));
+    const sprites=Promise.all(['frame_sheet.png','hae1.png','hae2.png'].map((f,i)=>
+      fetchAsset(f, spriteSlots[i]).then(imgFromBlob).catch(()=>null)));
+    // 音は無くても遊べるので、こけても全体を巻き添えにしない
+    const audio=Promise.all(AUDIO_FILES.map((f,i)=>
+      fetchAsset(f+'.mp3', audioSlots[i]).then(b=>b.arrayBuffer())
+        .then(ab=>{ audioRaw[f]=ab; }).catch(()=>{ setSlot(audioSlots[i],1); })));
+
+    return Promise.all([scenes, sprites, audio]).then(([list2, sp])=>{
+      if(sp[0]){ frameImg=sp[0]; fsw=frameImg.naturalWidth/FRAME_N; fsh=frameImg.naturalHeight; }
+      if(sp[1] && sp[2]){ HAE[0]=sp[1]; HAE[1]=sp[2]; haeReady=true; }
+      SCENES=list2;
+      // 1枚目と2枚目だけ先に展開する。残りは遊びながら順に差し替わる
+      return ensureFull(0).then(()=>{ setSlot(decodeSlots[0],1); return ensureFull(1); })
+                          .then(()=>  setSlot(decodeSlots[1],1));
+    });
+  })
+  .then(()=>{
+    initScene();
+    initAudio();                                   // ここで全曲デコード（AC は suspended のまま）
+    ready=true;
+    el('go').textContent='クリックしてスタート';
+    const s=el('start');
+    s.classList.add('ready');
+    s.setAttribute('aria-label','クリックしてスタート');
+    s.removeAttribute('aria-disabled');
+  })
   .catch(()=>{     // file:// 直開きや flow 未作成。遊べないことだけタイトルに出す
-    const g=document.querySelector('.go');
-    if(g) g.textContent='scenes/flow.json が読めない';
+    el('go').textContent='scenes が読めない';
+    el('start').classList.add('dead');
   });
 
 // ── 状態 ───────────────────────────────────────────────────
 //  activeAnchor：いまワールド原点に据えている領域。'zoom'＝次への判定、'land'＝着地点
-let node=0, activeAnchor='zoom', armed=false, blend=0;
+let node=0, activeAnchor='zoom', armed=false, blend=0, aimed=false;
 let pendingAnchor=false, moveWait=0;
 const PAPER='#ffffff';
 const smoothstep=(a,b,x)=>{const t=Math.max(0,Math.min(1,(x-a)/(b-a))); return t*t*(3-2*t);};
 const hasNext=()=>!!(SCENES && node+1<SCENES.length && SCENES[node].zoom);
+// 次の絵がまだ展開できていないうちは入れ替えない（継ぎ目に白が出るのを防ぐ）。
+// ハエが飛ぶ・構えるところまでは hasNext で通すので、待たされている感じにはならない
+const nextReady=()=>hasNext() && !!SCENES[node+1].full;
 
 function initScene(){
   node=0;
@@ -413,6 +616,8 @@ function initScene(){
   const sc=SCENES[0], a=regionOf(0,activeAnchor), k=R0/a.r;
   camX=(sc.w/2-a.x)*k; camY=(sc.h/2-a.y)*k;      // 絵の中心を画面中央に
   fly.x=fly.fx=fly.tx=0; fly.y=fly.fy=fly.ty=0; fly.t=1;
+  blend=0; aimed=false; pendingAnchor=false;
+  tendImages();
   fitScene();
 }
 function fitScene(){                             // 絵全体が収まる倍率から始める
@@ -439,16 +644,29 @@ function reanchor(){
   lastNotch=null; prevZoomA=null;                // ダイヤル音の基準も取り直す（据え替えで鳴らさない）
   activeAnchor='zoom';
 }
-function updateStage(){
+// ハエの止まり場所が中央の枠にどれだけ収まっているか。
+// 一度合わせたら AIM_OUT まで許す（境界でクロスフェードがチラつかないように）
+function updateAim(){
+  const d=Math.hypot(camX,camY)*scale();         // 原点の画面中心からのズレ（画面px）
+  const u=Math.min(W,H);
+  aimed = d < (aimed ? AIM_OUT : AIM_IN)*u;
+}
+
+function updateStage(dt){
   if(!SCENES) return;
-  const t=(armed && hasNext()) ? smoothstep(swapLo, SWAP_HI, zoom) : 0;
-  if(armed && t>=0.999){
+  updateAim();
+  // 「深く寄っている」だけでは進まない。狙いの場所を中央に収めていることが要る
+  const t=(armed && nextReady() && aimed) ? smoothstep(swapLo, SWAP_HI, zoom) : 0;
+  // 寄りには即応、外したときだけ少し粘ってから戻す。
+  // 外しているあいだは次の絵が薄く出て消えるので「今のは違う」が絵で判る
+  blend = t>blend ? t : blend+(t-blend)*(1-Math.exp(-dt/AIM_BACK));
+  if(armed && blend>=0.999){
     node++;
     activeAnchor='land';                         // B は既にこの基準で描かれているので継ぎ目なし
-    armed=false; moveWait=MOVE_WAIT;
-    sceneSwapAudio();                            // 切り替わり音 ＋ BGM 入れ替え
+    armed=false; aimed=false; blend=0; moveWait=MOVE_WAIT;
+    sceneSwapAudio(node);                        // 切り替わり音（入る先で選ぶ）＋ BGM 入れ替え
+    tendImages();                                // 使い終わった絵を返し、次の次を先に展開しておく
   }
-  blend = armed ? t : 0;
 }
 
 // ── ハエ：切り替わったら1回だけ飛んで、そこに固定 ───────────────
@@ -479,12 +697,9 @@ function flyUpdate(dt){
     }
   }
 }
-// ハエのスプライト（hae1/hae2 の2コマを交互に出して羽ばたきにする）
-const HAE=[new Image(), new Image()]; let haeReady=false;
-{ let n=0; ['hae1.png','hae2.png'].forEach((src,i)=>{
-    HAE[i].onload=()=>{ if(++n===2) haeReady=true; };
-    HAE[i].src=src;
-  }); }
+// ハエのスプライト（hae1/hae2 の2コマを交互に出して羽ばたきにする）。
+// 実体はローディングで取り込んで差し込む
+const HAE=[null,null]; let haeReady=false;
 
 function drawFly(t){
   const flying=fly.t<1;
@@ -542,10 +757,9 @@ const CAN_FILTER=(()=>{                        // Safari 17 未満などは ctx.
   const c=document.createElement('canvas').getContext('2d');
   c.filter='blur(2px)'; return c.filter==='blur(2px)';
 })();
-// 縮小率は「デバイス画素」に対する比。CSS px 基準にすると高DPRの端末ほど粗くなる（DPR2で実質0.19倍＝5.26倍拡大）。
-// 0.5 はちょうど 1/2 なので縮小も拡大も端数が出ず、リサンプルが一番きれいに乗る（0.65 より 0.5 の方が誤差が小さい）
-const DS = CAN_FILTER ? 0.5 : 0.07;            // filter が無い環境は縮小拡大のボケだけで代用する
-
+// 縮小率（DS）は「デバイス画素」に対する比。CSS px 基準にすると高DPRの端末ほど粗くなる（DPR2で実質0.19倍＝5.26倍拡大）。
+// 0.5 はちょうど 1/2 なので縮小も拡大も端数が出ず、リサンプルが一番きれいに乗る（0.65 より 0.5 の方が誤差が小さい）。
+// 実際の値は自動画質の段に応じて resize() が入れる
 const mkCv=()=>document.createElement('canvas');
 const wsrcCv=mkCv(), blurCv=mkCv();
 const wctx=wsrcCv.getContext('2d'), bctx=blurCv.getContext('2d');
@@ -555,7 +769,7 @@ let bw=0, bh=0, bpad=0, brad=0, bmask=null;
 const PERIPH_STOPS=[[0,0],[0.25,0.22],[0.5,0.58],[0.75,0.88],[1,1]];
 
 function buildPeriph(){
-  if(!PERIPH || !W || !H) return;
+  if(!periphOn || !W || !H) return;
   bw=Math.max(1,Math.round(off.width*DS)); bh=Math.max(1,Math.round(off.height*DS));
   brad=PERIPH_MAX*DPR*DS;                      // PERIPH_MAX は画面px なのでバッファのpxへ換算する
   // ぼかしはキャンバス外を透明として拾うので、縁が欠けないぶんの余白を取る
@@ -572,10 +786,7 @@ function buildPeriph(){
 //  手描き枠の4コマを 8fps でループさせるだけ。線がぷるぷるして紙の上に留まる。
 //  ワールドではなく画面座標に固定するので、寄っても引いても枠の大きさは変わらない。
 //  「この枠にいい感じに収まったら」の基準にする当たり枠。
-const frameImg=new Image();
-let fsw=0, fsh=0;                                       // 1コマぶんのサイズ
-frameImg.onload=()=>{ fsw=frameImg.naturalWidth/FRAME_N; fsh=frameImg.naturalHeight; };
-frameImg.src='frame_sheet.png';
+let frameImg=null, fsw=0, fsh=0;                        // fsw/fsh は1コマぶんのサイズ
 
 function drawFrame(t){
   if(!FRAME_ON || !started || !fsw) return;             // タイトル中は出さない
@@ -591,7 +802,7 @@ function drawFrame(t){
 function present(t){
   if(!W || !H) return;                                  // レイアウト前は描くものが無い
   view.drawImage(off, 0,0, W,H);                        // まず鮮明な絵をそのまま
-  if(PERIPH && bmask){
+  if(periphOn && bmask){
     const pw=blurCv.width, ph=blurCv.height;
     // 1) 縮小。ぼかしが縁で欠けないよう、引き伸ばし下地 → 正位置 の2回描きで余白を埋める
     wctx.setTransform(1,0,0,1,0,0);
@@ -626,28 +837,52 @@ function paint(idx, anchorName, alpha){
   // 最後のシーンだけ宇宙なので黒地。クロスフェードで黒ごとぬるっと入る
   ctx.fillStyle = idx===SCENES.length-1 ? '#000' : PAPER;
   ctx.fillRect(0,0,W,H);
-  ctx.save();
-  const s=scale();
-  ctx.translate(W/2-camX*s, H/2-camY*s); ctx.scale(s*k, s*k);
-  ctx.translate(-a.x, -a.y);
-  ctx.drawImage(sc.img, 0, 0);
-  ctx.restore();
+  if(sc.full){
+    ctx.save();
+    const s=scale();
+    ctx.translate(W/2-camX*s, H/2-camY*s); ctx.scale(s*k, s*k);
+    ctx.translate(-a.x, -a.y);
+    // 展開したビットマップは長辺 4096 で頭打ちにしてあるので、
+    // 出す大きさは必ず元絵の寸法で指定する（領域の座標は元絵基準のまま効く）
+    ctx.drawImage(sc.full, 0, 0, sc.w, sc.h);
+    ctx.restore();
+  }
   ctx.globalAlpha=1;
 }
 
-const el=id=>document.getElementById(id);
 let last=0;
 
+// ── 間に合っているかを見る ─────────────────────────────────
+//  1フレームの実測値を45枚ためて中央値を取る。平均だとデコードや
+//  GCの単発の引っかかりに引きずられるので中央値で見る。
+//  下げるだけで上げ直さない（上げ下げを繰り返すと画面がちらつく）。
+const PERF_N=45, PERF_BAD=0.026;   // 中央値26ms＝およそ38fpsを切ったら1段下げる
+let perfBuf=[], perfNext=0;
+
+function watchPerf(dt, t){
+  if(qi>=QUALITY.length-1 || !started || document.hidden) return;
+  if(t<perfNext) return;                       // 段を下げた直後は落ち着くまで測らない
+  perfBuf.push(dt);
+  if(perfBuf.length<PERF_N) return;
+  perfBuf.sort((a,b)=>a-b);
+  const med=perfBuf[PERF_N>>1];
+  perfBuf=[];
+  if(med>PERF_BAD){ qi++; perfNext=t+1.5; resize(); }
+}
+
 function frame(ms){
-  const t=ms/1000, dt=Math.min(0.05, last?t-last:0.016); last=t;
-  easeZoom(dt); clickAudio(dt); bgmUpdate(dt); updateStage(); flyUpdate(dt);
+  // dt は 0〜0.05 に丸める。上限はタブ復帰時の飛びを吸うため、
+  // 下限は負の dt が指数補間を発散させて音量に NaN が乗るのを防ぐため
+  const t=ms/1000, dt=Math.max(0, Math.min(0.05, last?t-last:0.016)); last=t;
+  watchPerf(dt, t);
+  easeZoom(dt); clickAudio(dt); bgmUpdate(dt); updateStage(dt); flyUpdate(dt);
   PX = 1/scale();
 
   if(SCENES){
     if(fitPending) fitScene();
     paint(node, activeAnchor, 1);                 // A は不透明
-    if(blend>0.001 && node+1<SCENES.length)       // B を alpha=blend で重ねる（濁らない合成）
-      paint(node+1, 'land', blend);
+    if(blend>0.001 && node+1<SCENES.length && SCENES[node+1].full)
+      paint(node+1, 'land', blend);               // B を alpha=blend で重ねる（濁らない合成）
     if(node>0 && node<SCENES.length-1) drawFly(t);  // タイトルと最後の宇宙にはハエは居ない
   }else{
     ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H);   // 読み込みが終わるまでは紙だけ
@@ -663,8 +898,9 @@ function frame(ms){
 //  ここが唯一確実な「ユーザー操作」なので、音のアンロックもこの1回に賭ける。
 let started=false;
 function startGame(){
-  if(started) return;
+  if(started || !ready) return;                       // 読み込み中は押しても始まらない
   started=true;
+  perfNext=last+1.5;                                  // 出だしの引っかかりは画質の判断に入れない
   unlockAudio();
   const s=el('start');
   s.classList.add('off');
